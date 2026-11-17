@@ -78,6 +78,7 @@ function addMessage({ authorId, name, photo, text, self = false }) {
   if (!self) {
     unread += 1;
     updateUnread();
+    notify(name, text, 'chat');
   }
 }
 

@@ -91,6 +91,7 @@
     .voice-icon svg { width: 14px; height: 14px; }
     .icon-btn svg, .icon-btn-lg svg { width: 18px; height: 18px; }
     .icon-btn-lg { width: 44px; padding: 0; }
+    #notify-btn[aria-pressed="true"] { background: rgb(59 217 138 / .14); color: var(--online); } /* on is good, not the red "pressed" look */
     .ptt-note { font-size: 12px; }
     .icon-btn.talking, .icon-btn-lg.talking { background: rgb(59 217 138 / .18); color: var(--online); box-shadow: 0 0 0 2px var(--online); } /* push-to-talk held */
     .icon-btn[aria-pressed="true"], .icon-btn-lg[aria-pressed="true"] { background: var(--danger-bg); color: var(--danger); }
@@ -209,6 +210,7 @@
         <span class="topbar-end">
           <span class="pill reconnecting" id="reconnecting" role="status" hidden>Reconectando…</span>
           <span class="pill" id="live" hidden>● Ao vivo</span>
+          <button class="icon-btn" id="notify-btn" hidden></button>
         </span>
       </header>
 
