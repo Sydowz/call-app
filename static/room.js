@@ -1,19 +1,33 @@
 'use strict';
 
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
-const AVATAR_COLORS = ['#2E3A5C', '#5C3B3B', '#3B5C47', '#4A3B5C', '#5C4F3B', '#3B525C'];
-const MAX_PHOTO = 40_000; // photos travel inside signaling messages (64 KB limit on the server)
+// STUN until /api/ice answers; with a TURN key the server adds Cloudflare TURN,
+// which relays the video when a network blocks direct connections.
+let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+let iceLoadedAt = 0;
+const ICE_REFRESH_MS = 6 * 60 * 60_000; // credentials last a day; refresh well before
+
+async function loadIceServers() {
+  if (Date.now() - iceLoadedAt < ICE_REFRESH_MS) return;
+  try {
+    const res = await fetch('/api/ice', { cache: 'no-store' });
+    const data = res.ok ? await res.json() : null;
+    if (Array.isArray(data?.iceServers) && data.iceServers.length) {
+      iceServers = data.iceServers;
+      iceLoadedAt = Date.now();
+    }
+  } catch {
+    // Keep STUN: direct connections still work for most networks.
+  }
+}
 const roomId = location.pathname.split('/').pop();
 const canShare = !!navigator.mediaDevices?.getDisplayMedia;
 
-const $ = (id) => document.getElementById(id);
 const shareBtn = $('share');
 
 let ws = null; // set once we join; null means "not in the room yet"
 let myId = null;
 let myNick = load('nick');
 let myPhoto = validPhoto(load('photo'));
-let draftPhoto = ''; // photo being edited in the profile dialog
 let localTrack = null; // our screen's video track while sharing
 let roomFull = false;
 let maxPeers = 12; // the server sends the real limit in welcome/full
@@ -24,125 +38,37 @@ let timer = null;
 const peers = new Map();
 const localScreen = buildScreen();
 
-// ---------- perfil (nick) ----------
-
-function load(key) {
-  try { return localStorage.getItem(key) || ''; } catch { return ''; }
-}
-
-function save(key, value) {
-  try {
-    if (value) localStorage.setItem(key, value); else localStorage.removeItem(key);
-  } catch { /* private mode: keep it in memory */ }
-}
-
-// Only inline images are accepted: a remote URL would let a participant
-// track everyone else's IP when their browser fetches it.
-function validPhoto(value) {
-  return typeof value === 'string' && value.length <= MAX_PHOTO &&
-    /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(value) ? value : '';
-}
-
-// Center-crops and shrinks the picked image to a small JPEG data URL.
-async function photoFromFile(file) {
-  const bitmap = await createImageBitmap(file);
-  const size = 128;
-  const side = Math.min(bitmap.width, bitmap.height);
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#1F2230'; // JPEG has no transparency
-  ctx.fillRect(0, 0, size, size);
-  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
-  bitmap.close();
-  for (const quality of [0.85, 0.7, 0.5]) {
-    const url = canvas.toDataURL('image/jpeg', quality);
-    if (url.length <= MAX_PHOTO) return url;
-  }
-  throw new Error('foto grande demais');
-}
+// ---------- perfil ----------
 
 function profileMsg() {
   return { nick: myNick, photo: myPhoto, hwH264 };
-}
-
-function cleanNick(value) {
-  return Array.from(String(value ?? '').trim()).slice(0, 32).join('');
 }
 
 function displayName(peer) {
   return peer.nick || `Participante ${peer.id}`;
 }
 
-function initials(name) {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const chars = words.length > 1
-    ? [Array.from(words[0])[0], Array.from(words[1])[0]]
-    : Array.from(words[0] ?? '?').slice(0, 2);
-  return chars.join('').toUpperCase();
-}
-
-function paintAvatar(el, name, id, photo) {
-  el.textContent = photo ? '' : initials(name || '?');
-  el.style.backgroundColor = AVATAR_COLORS[((id ?? 1) - 1) % AVATAR_COLORS.length];
-  // Safe inside url(""): validPhoto() only lets base64 characters through.
-  el.style.backgroundImage = photo ? `url("${photo}")` : '';
-}
-
-const profile = $('profile');
-const nickInput = $('nick-input');
-
+// Joining asks for a nick first; afterwards the same dialog edits the profile.
 function openProfile() {
-  $('profile-title').textContent = ws ? 'Editar perfil' : 'Como seus amigos vão te ver?';
-  $('profile-submit').textContent = ws ? 'Salvar' : 'Entrar na sala';
-  nickInput.value = myNick;
-  draftPhoto = myPhoto;
-  updatePreview();
-  profile.showModal();
+  openProfileDialog({
+    title: ws ? 'Editar perfil' : 'Como seus amigos vão te ver?',
+    submitLabel: ws ? 'Salvar' : 'Entrar na sala',
+    required: !ws,
+    nick: myNick,
+    photo: myPhoto,
+    colorId: myId,
+    onSave(nick, photo) {
+      myNick = nick;
+      myPhoto = photo;
+      if (ws) {
+        peers.forEach((peer) => send(peer.id, profileMsg()));
+        refresh();
+      } else {
+        enterRoom();
+      }
+    },
+  });
 }
-
-function updatePreview() {
-  paintAvatar($('preview-avatar'), cleanNick(nickInput.value), myId, draftPhoto);
-  $('photo-remove').hidden = !draftPhoto;
-  $('photo-pick').textContent = draftPhoto ? 'Trocar foto' : 'Adicionar foto';
-}
-
-nickInput.oninput = updatePreview;
-$('photo-pick').onclick = () => $('photo-input').click();
-$('photo-remove').onclick = () => {
-  draftPhoto = '';
-  updatePreview();
-};
-$('photo-input').onchange = async () => {
-  const file = $('photo-input').files[0];
-  $('photo-input').value = ''; // picking the same file again still fires onchange
-  if (!file) return;
-  try {
-    draftPhoto = await photoFromFile(file);
-    updatePreview();
-  } catch {
-    toast('Não deu para usar essa imagem');
-  }
-};
-profile.oncancel = (e) => {
-  if (!ws) e.preventDefault(); // a nick is required before joining
-};
-$('profile-form').onsubmit = (e) => {
-  e.preventDefault();
-  const nick = cleanNick(nickInput.value);
-  if (!nick) return;
-  myNick = nick;
-  myPhoto = draftPhoto;
-  save('nick', myNick);
-  save('photo', myPhoto);
-  profile.close();
-  if (ws) {
-    peers.forEach((peer) => send(peer.id, profileMsg()));
-    refresh();
-  } else {
-    enterRoom();
-  }
-};
 $('edit').onclick = openProfile;
 
 // ---------- uma aba por sala ----------
@@ -195,7 +121,7 @@ let reconnecting = false;
 let reconnectTimer = null;
 
 async function join() {
-  hwH264 = await hwH264Ready; // must be in the first profile we send
+  [hwH264] = await Promise.all([hwH264Ready, loadIceServers()]); // both needed before any peer
   const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
   ws = socket;
   ws.onmessage = onMessage;
@@ -240,6 +166,7 @@ function onMessage(ev) {
         timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
       }
       for (const id of msg.peers) createPeer(id, true);
+      rememberRoom(roomId); // shows up in the lobby's "Suas salas"
       setChatEnabled(true);
       addSystem(reconnecting ? 'Reconectado.' : 'Você entrou na sala. As mensagens do chat não ficam salvas.');
       reconnecting = false;
@@ -284,7 +211,7 @@ function enqueue(peer, step) {
 // ---------- WebRTC ----------
 
 function createPeer(id, initiator) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const pc = new RTCPeerConnection({ iceServers });
   const peer = {
     id, nick: '', photo: '', pc, transceiver: null,
     sharing: false, iWatch: false, watchesMe: false,
@@ -296,12 +223,14 @@ function createPeer(id, initiator) {
   peer.profileKnown = new Promise((resolve) => (peer.resolveProfile = resolve));
   peer.screen.watchBtn.onclick = () => setWatch(peer, true);
   peer.screen.unwatchBtn.onclick = () => setWatch(peer, false);
+  peer.screen.retryBtn.onclick = () => retryConnection(peer);
   peers.set(id, peer);
 
   pc.onicecandidate = (e) => {
     if (e.candidate) send(id, { candidate: e.candidate });
   };
   pc.onconnectionstatechange = () => {
+    if (pc.connectionState !== 'failed') peer.retrying = false;
     if (pc.connectionState === 'connected') tuneSender(peer); // encodings exist now
     refresh();
   };
@@ -401,6 +330,8 @@ async function handleSignal(peer, data) {
   } else if ('chat' in data) {
     const text = cleanChat(data.chat);
     if (text) addMessage({ authorId: peer.id, name: displayName(peer), photo: peer.photo, text });
+  } else if ('restart' in data) {
+    if (myId > peer.id) restartIce(peer); // they asked us to redo the connection
   } else if ('watch' in data) {
     // Ignore a request that crossed with us stopping the share.
     peer.watchesMe = !!data.watch && !!localTrack;
@@ -490,6 +421,51 @@ function setShareMode(mode) {
 $('mode-jogo').onclick = () => setShareMode('jogo');
 $('mode-texto').onclick = () => setShareMode('texto');
 
+// "Tentar de novo": an ICE restart (new offer with fresh ICE credentials).
+// Only the participant with the higher number sends it, so both sides
+// clicking at once can't produce two colliding offers; the other one asks.
+function retryConnection(peer) {
+  peer.retrying = true;
+  refresh();
+  setTimeout(() => {
+    if (peer.pc.connectionState === 'failed') {
+      peer.retrying = false; // give the button back if nothing changed
+      refresh();
+    }
+  }, 15_000);
+  if (myId > peer.id) restartIce(peer);
+  else send(peer.id, { restart: true });
+}
+
+function restartIce(peer) {
+  enqueue(peer, async () => {
+    await peer.pc.setLocalDescription(await peer.pc.createOffer({ iceRestart: true }));
+    send(peer.id, { description: peer.pc.localDescription });
+  });
+}
+
+// Fullscreen on desktop and Android; iPhone Safari only supports it on the
+// <video> element through its own webkit API. Phones also try landscape.
+function togglePip(video) {
+  if (document.pictureInPictureElement === video) {
+    document.exitPictureInPicture().catch(() => {});
+  } else {
+    video.requestPictureInPicture().catch((err) => console.warn('picture-in-picture', err));
+  }
+}
+
+function enterFullscreen(video) {
+  const landscape = () => screen.orientation?.lock?.('landscape').catch(() => {});
+  if (video.requestFullscreen) {
+    video.requestFullscreen().then(landscape, () => video.webkitEnterFullscreen?.());
+  } else {
+    video.webkitEnterFullscreen?.();
+  }
+}
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) screen.orientation?.unlock?.();
+});
+
 function setWatch(peer, watch) {
   peer.iWatch = watch;
   send(peer.id, { watch });
@@ -500,6 +476,7 @@ function removePeer(id) {
   const peer = peers.get(id);
   if (!peer) return;
   peer.pc.close();
+  if (document.pictureInPictureElement === peer.screen.video) document.exitPictureInPicture().catch(() => {});
   peer.screen.card.remove();
   peers.delete(id);
   refresh();
@@ -528,6 +505,7 @@ async function startShare() {
 // Our own preview is one more video to decode and paint, so it starts hidden.
 let previewOn = load('preview') === 'on';
 localScreen.watchBtn.textContent = 'Mostrar prévia';
+localScreen.pipBtn.remove(); // no point floating your own screen
 localScreen.unwatchBtn.textContent = 'Esconder prévia';
 localScreen.watchBtn.onclick = () => setPreview(true);
 localScreen.unwatchBtn.onclick = () => setPreview(false);
@@ -675,29 +653,45 @@ $('chat-close').onclick = () => {
 document.addEventListener('visibilitychange', updateUnread);
 mobile.addEventListener('change', updateUnread);
 
-$('leave').onclick = () => leaveRoom('Você saiu da sala', 'O link continua valendo enquanto houver alguém na sala.');
+// Leaving goes back to the lobby, where your rooms are listed.
+function goToLobby() {
+  left = true;
+  clearTimeout(reconnectTimer);
+  stopShare();
+  ws?.close();
+  releaseLock?.();
+  location.assign('/');
+}
+$('leave').onclick = goToLobby;
+$('home').onclick = (e) => {
+  e.preventDefault();
+  goToLobby();
+};
 
-// ---------- link da sala ----------
+// ---------- convidar ----------
 
-async function copyLink() {
+// Phones open the system share sheet (WhatsApp etc.); elsewhere a ready-made
+// message goes to the clipboard.
+async function invite() {
+  const url = location.href;
+  const text = `Bora? Entra na sala ${roomName(roomId)} do Friends Call:`;
+  if (navigator.share && mobile.matches) {
+    try {
+      await navigator.share({ title: 'Friends Call', text, url });
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return; // closed the share sheet
+    }
+  }
   try {
-    await navigator.clipboard.writeText(location.href);
-    toast('Link copiado');
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    toast('Convite copiado. É só colar na conversa.');
   } catch {
-    window.prompt('Copie o link da sala:', location.href); // clipboard needs HTTPS
+    window.prompt('Copie o convite:', `${text} ${url}`); // clipboard needs HTTPS
   }
 }
-$('copy').onclick = copyLink;
-$('copy-side').onclick = copyLink;
-
-let toastTimer = null;
-function toast(text) {
-  const el = $('toast');
-  el.textContent = text;
-  el.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), 2000);
-}
+$('invite').onclick = invite;
+$('invite-side').onclick = invite;
 
 const notice = $('notice');
 const RELOAD = { label: 'Entrar de novo', run: () => location.reload() };
@@ -715,13 +709,6 @@ $('notice-retry').onclick = () => noticeAction();
 
 // ---------- interface ----------
 
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text) node.textContent = text;
-  return node;
-}
-
 function elapsed(since) {
   const s = Math.floor((Date.now() - since) / 1000);
   return [s / 3600, (s % 3600) / 60, s % 60].map((n) => String(Math.floor(n)).padStart(2, '0')).join(':');
@@ -736,20 +723,37 @@ function buildScreen() {
   video.muted = true;
   video.playsInline = true;
   video.title = 'Duplo clique para tela cheia';
-  video.ondblclick = () => video.requestFullscreen?.();
+  video.ondblclick = () => enterFullscreen(video);
   const waiting = el('div', 'waiting');
   const waitingText = el('span');
   const watchBtn = el('button', 'btn primary', 'Assistir');
   waiting.append(waitingText, watchBtn);
-  frame.append(video, waiting);
+  const failed = el('div', 'waiting failed');
+  failed.hidden = true;
+  const failedText = el('strong');
+  const retryBtn = el('button', 'btn primary', 'Tentar de novo');
+  failed.append(
+    failedText,
+    el('span', null, 'Costuma acontecer com VPN ligada, 4G ou rede de empresa. Desligar a VPN costuma resolver.'),
+    retryBtn,
+  );
+  frame.append(video, waiting, failed);
   const pill = el('span', 'pill');
   const hint = el('span', 'hint muted');
-  const unwatchBtn = el('button', 'btn small', 'Parar de assistir');
+  const fullBtn = el('button', 'btn small', 'Tela cheia');
+  fullBtn.onclick = () => enterFullscreen(video);
+  // Picture-in-Picture: a small always-on-top window, to watch while playing.
+  const pipBtn = el('button', 'btn small pip-btn', 'Janela flutuante');
+  pipBtn.onclick = () => togglePip(video);
+  video.addEventListener('enterpictureinpicture', () => (pipBtn.textContent = 'Fechar janela'));
+  video.addEventListener('leavepictureinpicture', () => (pipBtn.textContent = 'Janela flutuante'));
+  const unwatchBtn = el('button', 'btn small');
+  unwatchBtn.append(el('span', 'long', 'Parar de assistir'), el('span', 'short', 'Parar'));
   const foot = el('div', 'screen-foot');
-  foot.append(pill, hint, unwatchBtn);
+  foot.append(pill, hint, pipBtn, fullBtn, unwatchBtn);
   card.append(frame, foot);
   $('screens').append(card);
-  return { card, video, waiting, waitingText, watchBtn, pill, hint, unwatchBtn };
+  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, pipBtn, fullBtn, unwatchBtn };
 }
 
 function peerStatus(peer) {
@@ -787,10 +791,21 @@ function personTile(person) {
 }
 
 // `watching` false shows the "Assistir" placeholder instead of the video.
-function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false }) {
+// `failedText` replaces both the video and the "Assistir" placeholder.
+function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false, failedText = '' }) {
+  screen.fullBtn.hidden = !canUnwatch; // only for a screen you are watching
+  screen.pipBtn.hidden = !canUnwatch || !document.pictureInPictureEnabled;
+  // Close the floating window when that screen stops being watched.
+  if ((!visible || !watching || failedText) && document.pictureInPictureElement === screen.video) {
+    document.exitPictureInPicture().catch(() => {});
+  }
   screen.card.hidden = !visible;
-  screen.video.hidden = !watching;
-  screen.waiting.hidden = watching;
+  screen.video.hidden = !watching || !!failedText;
+  screen.waiting.hidden = watching || !!failedText;
+  if (screen.failed) {
+    screen.failed.hidden = !failedText;
+    screen.failedText.textContent = failedText;
+  }
   screen.waitingText.textContent = waitingText;
   screen.pill.textContent = label;
   screen.hint.textContent = hint;
@@ -823,14 +838,17 @@ function refresh() {
   });
   for (const peer of list) {
     const name = displayName(peer);
+    const failed = peer.pc.connectionState === 'failed';
     showScreen(peer.screen, {
       visible: peer.sharing,
       watching: peer.iWatch,
       label: `● ${name} está compartilhando`,
-      hint: peer.iWatch ? 'Tela cheia: duplo clique' : 'O vídeo só chega para quem assiste',
+      hint: failed || peer.iWatch ? '' : 'O vídeo só chega para quem assiste',
       waitingText: `${name} está compartilhando a tela`,
-      canUnwatch: peer.iWatch,
+      canUnwatch: peer.iWatch && !failed,
+      failedText: failed ? (peer.retrying ? 'Tentando conectar de novo…' : `Não foi possível conectar com ${name}`) : '',
     });
+    peer.screen.retryBtn.hidden = !!peer.retrying;
   }
   const shown = (localTrack ? 1 : 0) + list.filter((p) => p.sharing).length;
   $('empty').hidden = shown > 0;
@@ -851,11 +869,8 @@ function refresh() {
 
 // ---------- início ----------
 
-// "churrasco-k3f9" (name + random suffix) shows as "churrasco"; random IDs
-// show their first 8 characters.
-const roomName = roomId.match(/^(.+)-[a-z0-9]{4}$/)?.[1] ?? roomId.slice(0, 8);
-$('room-tag').textContent = `# ${roomName}`;
-$('room-title').textContent = `Sala ${roomName}`;
+$('room-tag').textContent = `# ${roomName(roomId)}`;
+$('room-title').textContent = `Sala ${roomName(roomId)}`;
 if (!canShare) {
   shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';

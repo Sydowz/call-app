@@ -16,11 +16,11 @@ Precisa do Rust ([rustup.rs](https://rustup.rs)).
 cargo run --release
 ```
 
-Abra http://localhost:3000. Você cai numa sala nova (`/room/<id>`). É só copiar o link e mandar. Variáveis opcionais: `PORT` (padrão 3000) e `MAX_PEERS` (pessoas por sala, padrão 12), por exemplo `PORT=8080 MAX_PEERS=20 cargo run --release`.
+Abra http://localhost:3000. Você cai no **lobby**: escolha seu nick, crie uma sala (com nome opcional) ou entre com um convite. As salas por onde você passa ficam em "Suas salas", com quantas pessoas estão em cada uma agora. Dentro da sala, "Convidar" copia uma mensagem pronta com o link (no celular, abre o compartilhamento do sistema). Variáveis opcionais: `PORT` (padrão 3000) e `MAX_PEERS` (pessoas por sala, padrão 12), por exemplo `PORT=8080 MAX_PEERS=20 cargo run --release`.
 
 ## Testar
 
-**Duas abas (mesmo computador):** abra http://localhost:3000, copie o link da sala e abra numa segunda aba ou janela. Clique em "Compartilhar tela" numa delas e a tela aparece na outra. Dica: compartilhe uma *outra* janela ou aba para não criar o efeito de espelho infinito. Dê um duplo clique no vídeo para ver em tela cheia.
+**Dois navegadores (mesmo computador):** abra http://localhost:3000, crie uma sala, clique em "Convidar" e abra o link em outro navegador ou numa janela anônima (duas abas do mesmo navegador não entram na mesma sala). Clique em "Compartilhar tela" numa delas e a tela aparece na outra. Dica: compartilhe uma *outra* janela ou aba para não criar o efeito de espelho infinito. Dê um duplo clique no vídeo para ver em tela cheia.
 
 **Dois computadores:** o servidor escuta em `0.0.0.0`, então na mesma rede dá para abrir `http://<IP-do-servidor>:3000/room/<id>`. Mas atenção: **os navegadores só liberam o compartilhamento de tela em HTTPS ou `localhost`**. Por HTTP pela rede, a pessoa consegue *assistir*, mas não *compartilhar*. Opções:
 
@@ -37,7 +37,15 @@ fly apps create <nome-unico>         # e troque `app = "..."` no fly.toml por es
 fly deploy
 ```
 
-Depois é só abrir `https://<nome-unico>.fly.dev`. Para mudar o limite de pessoas: `fly secrets set MAX_PEERS=20` (ou edite `[env]` no `fly.toml`). Logs: `fly logs`.
+Depois é só abrir `https://<nome-unico>.fly.dev`.
+
+**TURN (recomendado):** sem ele, quem está em VPN, 4G ou rede de empresa pode não conseguir conectar. Crie uma chave em Cloudflare › Realtime › TURN Server (1.000 GB/mês grátis) e configure:
+
+```sh
+fly secrets set TURN_KEY_ID=<id da chave> TURN_KEY_API_TOKEN=<token da chave>
+```
+
+O servidor gera credenciais temporárias (24 h) pela API da Cloudflare e as entrega em `GET /api/ice`; a chave nunca vai para o navegador. Rodando localmente, as mesmas variáveis funcionam (veja `.env.example`). Para mudar o limite de pessoas: `fly secrets set MAX_PEERS=20` (ou edite `[env]` no `fly.toml`). Logs: `fly logs`.
 
 ## Desenvolvimento
 
@@ -51,7 +59,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 
 ## Limitações
 
-- Sem TURN: em algumas redes (NAT simétrico, redes corporativas, alguns 4G) a conexão P2P falha. O nome do participante aparece com "falha na conexão P2P".
+- TURN é opcional: sem `TURN_KEY_ID`/`TURN_KEY_API_TOKEN`, o app usa só STUN, e em algumas redes (NAT simétrico, VPN, redes corporativas, alguns 4G) a conexão direta falha; o card mostra "Não foi possível conectar" com "Tentar de novo".
 - Mesh: quem compartilha envia uma cópia do vídeo para cada pessoa *que está assistindo*. Com a sala cheia (12) isso dá até 11 envios, o que exige um bom upload; salas bem maiores pedem um servidor de mídia (SFU, issue #25).
 - Se a conexão com o servidor cair, o app reconecta sozinho (1s, 2s, 4s… até 30s entre tentativas) e refaz as conexões; quem estava compartilhando continua, mas quem assistia precisa clicar em Assistir de novo.
 
@@ -66,6 +74,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 - **O aviso "compartilhando/parou" vai pelo próprio WebSocket** em vez de um DataChannel. O servidor repassa esse aviso sem ler o conteúdo, como faz com o resto.
 - **`tokio::select!` num socket só, em vez de dividi-lo**: dispensa o crate `futures-util`.
 - **Erros com `Result` e `?` (`Box<dyn Error>` no `main`) em vez de `anyhow`**: o servidor só tem dois pontos de falha, abrir a porta e ler `PORT`.
+- **`ureq` para falar com a API da Cloudflare (TURN)**: um cliente HTTPS pequeno e síncrono, chamado numa thread separada, e só uma vez a cada 12 h (as credenciais ficam em cache).
 - **`println!` em vez de `tracing`**: os logs mostram só o número do participante e os 6 primeiros caracteres da sala. Não registram IP nem o link completo.
 
 ## Contribuir
