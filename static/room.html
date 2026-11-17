@@ -90,7 +90,7 @@
     #screens { min-height: 0; display: grid; gap: 12px; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); }
     .screen { min-height: 0; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
     .frame { flex: 1; min-height: 0; border-radius: 12px; background: var(--frame); border: 1px solid var(--border-strong); overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--faint); text-align: center; }
-    .frame video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
+    .frame video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; touch-action: manipulation; /* no double-tap zoom */ }
     #empty .frame { padding: 24px; }
     #empty strong { color: var(--muted); font-weight: 600; }
     .screen-foot { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
