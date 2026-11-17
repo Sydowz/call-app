@@ -51,10 +51,12 @@
     .frame video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; touch-action: manipulation; /* no double-tap zoom */ }
     #empty .frame { padding: 24px; }
     #empty strong { color: var(--muted); font-weight: 600; }
-    .screen-foot { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
-    .screen-foot .pill { color: var(--live); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+    .screen-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+    .screen-foot .pill { color: var(--live); font-size: 13px; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     .screen-foot .hint { margin-left: auto; }
-    .screen-foot .btn { flex: none; }
+    .screen-actions { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+    .screen-actions .btn { flex: none; }
+    .screen-actions .volume { flex: none; width: 90px; accent-color: var(--accent); }
     .waiting { padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--muted); }
     .failed strong { color: var(--warn); font-weight: 600; }
     .failed span { max-width: 44ch; font-size: 13px; }
@@ -82,7 +84,7 @@
 
     /* ---------- mobile ---------- */
     @media (max-width: 760px) {
-      .side, .screen-foot .hint, .tile .status, .mode, .pip-btn { display: none; }
+      .side, .screen-foot .hint, .tile .status, .mode, .pip-btn, .volume { display: none; }
       .topbar { height: 52px; padding: 0 14px; gap: 10px; }
       .topbar h2 { font-size: 15px; }
       .topbar .pill { font-size: 11px; padding: 3px 8px; }

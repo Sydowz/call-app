@@ -64,7 +64,7 @@ dialog p { margin: 0; }
 .actions { display: flex; gap: 8px; }
 .actions .btn { flex: 1; }
 
-.toast { position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; background: var(--raised); border: 1px solid var(--border-strong); font-size: 13px; z-index: 10; }
+.toast { position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); padding: 8px 14px; border-radius: 16px; background: var(--raised); border: 1px solid var(--border-strong); font-size: 13px; text-align: center; z-index: 10; }
 
 @media (max-width: 760px) {
   .long { display: none; }
