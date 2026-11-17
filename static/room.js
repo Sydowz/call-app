@@ -1056,6 +1056,47 @@ function refresh() {
   $('mode-texto').setAttribute('aria-pressed', String(shareMode === 'texto'));
 }
 
+// ---------- ping (RTT da conexão) ----------
+
+async function measureRtt(pc) {
+  if (pc.connectionState !== 'connected') return null;
+  const stats = await pc.getStats();
+  let rtt = null;
+  stats.forEach((s) => {
+    if (s.type === 'candidate-pair' && (s.selected || (s.nominated && s.state === 'succeeded')) && typeof s.currentRoundTripTime === 'number') {
+      rtt = Math.round(s.currentRoundTripTime * 1000);
+    }
+  });
+  return rtt;
+}
+
+async function updatePing() {
+  const rows = [];
+  for (const peer of [...peers.values()].sort((a, b) => a.id - b.id)) {
+    let rtt = null;
+    try { rtt = await measureRtt(peer.pc); } catch { /* peer closed meanwhile */ }
+    if (rtt !== null) rows.push({ nick: peer.nick || 'Participante', rtt });
+  }
+  const net = $('net');
+  net.hidden = rows.length === 0;
+  if (!rows.length) return;
+  const worst = Math.max(...rows.map((r) => r.rtt));
+  net.className = `net ${worst < 80 ? 'good' : worst < 200 ? 'mid' : 'bad'}`;
+  const tip = $('net-tip');
+  tip.replaceChildren(...rows.map((r) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const name = document.createElement('span');
+    name.textContent = r.nick;
+    const val = document.createElement('strong');
+    val.textContent = `${r.rtt} ms`;
+    row.append(name, val);
+    return row;
+  }));
+  net.setAttribute('aria-label', `Ping: ${rows.map((r) => `${r.nick} ${r.rtt} ms`).join(', ')}`);
+}
+setInterval(updatePing, 2000);
+
 // ---------- início ----------
 
 $('room-tag').textContent = `# ${displayRoomName(roomId)}`;

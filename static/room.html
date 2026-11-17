@@ -60,6 +60,15 @@
     .topbar h2 { margin: 0; font-size: 16px; font-weight: 600; }
     .topbar-end { margin-left: auto; display: flex; gap: 8px; }
     .topbar .pill { background: var(--live-bg); color: var(--live); }
+    .net { position: relative; display: inline-flex; align-items: center; padding: 6px; border-radius: 8px; color: var(--muted); cursor: default; }
+    .net[hidden] { display: none; }
+    .net svg { fill: currentColor; display: block; }
+    .net.good { color: #6FD39B; }
+    .net.mid { color: var(--warn); }
+    .net.bad { color: var(--danger); }
+    .net-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; min-width: 170px; padding: 10px 12px; border-radius: 10px; background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); font-size: 12px; line-height: 1.6; white-space: nowrap; box-shadow: 0 6px 20px rgba(0,0,0,.4); opacity: 0; visibility: hidden; transition: opacity .12s; pointer-events: none; }
+    .net:hover .net-tip, .net:focus .net-tip { opacity: 1; visibility: visible; }
+    .net-tip .row { display: flex; justify-content: space-between; gap: 16px; }
     .topbar .pill.reconnecting { background: var(--raised); color: var(--warn); }
 
     .content { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
@@ -175,6 +184,13 @@
         <h2 id="room-tag"></h2>
         <span class="muted" id="timer">00:00:00</span>
         <span class="topbar-end">
+          <span class="net" id="net" tabindex="0" role="img" aria-label="Qualidade da conexão" hidden>
+            <svg viewBox="0 0 20 16" width="20" height="16" aria-hidden="true">
+              <rect x="1" y="11" width="3.5" height="4" rx="1"/><rect x="6.5" y="7.5" width="3.5" height="7.5" rx="1"/>
+              <rect x="12" y="4" width="3.5" height="11" rx="1"/><rect x="17" y="0.5" width="2.5" height="14.5" rx="1" style="display:none"/>
+            </svg>
+            <span class="net-tip" role="tooltip" id="net-tip"></span>
+          </span>
           <span class="pill reconnecting" id="reconnecting" role="status" hidden>Reconectando…</span>
           <span class="pill" id="live" hidden>● Ao vivo</span>
         </span>
