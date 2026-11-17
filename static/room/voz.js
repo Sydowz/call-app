@@ -21,7 +21,19 @@ const voice = {
   deviceId: load('micId'),
   noiseSuppression: load('noiseSuppression') !== 'off',
   volume: Math.min(1, Math.max(0, Number(load('voiceVolume') || 1))),
+  ptt: load('ptt') === 'on', // push-to-talk: the mic only sends while the key is held
+  pttKey: load('pttKey') || 'KeyV', // KeyboardEvent.code
+  pttHeld: false,
 };
+
+// The mic sends unless muted or deafened; with push-to-talk, only while held.
+function micOpen() {
+  return !(voice.muted || voice.deafened) && (!voice.ptt || voice.pttHeld);
+}
+
+function applyTrackEnabled() {
+  if (voice.track) voice.track.enabled = micOpen();
+}
 
 // Voice wants the opposite of the screen's sound: echo cancellation, noise
 // suppression and automatic gain.
@@ -102,6 +114,8 @@ async function joinVoice() {
   voice.joined = true;
   voice.muted = false;
   voice.deafened = false;
+  voice.pttHeld = false;
+  applyTrackEnabled(); // push-to-talk starts closed
   document.body.classList.add('in-voice');
   chime(true);
   addSystem('Você entrou na voz.');
@@ -114,6 +128,7 @@ async function joinVoice() {
 function leaveVoice() {
   if (!voice.joined) return;
   voice.joined = false;
+  voice.pttHeld = false;
   voice.track?.stop();
   voice.track = null;
   voice.analyser = null;
@@ -131,7 +146,7 @@ function setMuted(muted) {
   if (!voice.joined) return;
   voice.muted = muted;
   if (!muted) voice.deafened = false; // talking again means hearing again
-  voice.track.enabled = !(voice.muted || voice.deafened);
+  applyTrackEnabled();
   broadcastVoice();
   applyVoiceOutput();
   refresh();
@@ -140,7 +155,7 @@ function setMuted(muted) {
 function setDeafened(deafened) {
   if (!voice.joined) return;
   voice.deafened = deafened;
-  voice.track.enabled = !(voice.muted || voice.deafened);
+  applyTrackEnabled();
   broadcastVoice();
   applyVoiceOutput();
   refresh();
@@ -149,8 +164,13 @@ function setDeafened(deafened) {
 const toggleMic = () => setMuted(!(voice.muted || voice.deafened));
 $('voice-join').onclick = joinVoice;
 $('voice-leave').onclick = leaveVoice;
-$('mic').onclick = toggleMic;
-$('me-mic').onclick = toggleMic;
+// With push-to-talk the button is "hold to talk" (see ptt.js); a click only
+// brings the mic back from muted/deafened.
+const micClick = () => {
+  if (!voice.ptt || voice.muted || voice.deafened) toggleMic();
+};
+$('mic').onclick = micClick;
+$('me-mic').onclick = micClick;
 $('deafen').onclick = () => setDeafened(!voice.deafened);
 $('me-deafen').onclick = () => setDeafened(!voice.deafened);
 document.addEventListener('keydown', (e) => { // Ctrl+Shift+M, like Discord
@@ -214,7 +234,9 @@ function renderVoiceUi() {
     button.innerHTML = silent ? ICONS.micOff : ICONS.mic;
     button.setAttribute('aria-pressed', String(silent));
     button.setAttribute('aria-label', label);
-    button.title = `${label} (Ctrl+Shift+M)`;
+    button.title = voice.ptt && !silent
+      ? `Segure para falar (${pttKeyName()}). Ctrl+Shift+M silencia`
+      : `${label} (Ctrl+Shift+M)`;
   }
   for (const id of ['deafen', 'me-deafen']) {
     const button = $(id);
@@ -254,6 +276,7 @@ let meterTimer = null;
 
 async function openVoiceSettings() {
   $('vs-ns').checked = voice.noiseSuppression;
+  renderPttSettings();
   $('vs-volume').value = String(voice.volume);
   $('voice-settings').showModal();
   try {
@@ -293,7 +316,7 @@ async function switchMic() {
     voice.track.stop();
     voice.track = track;
     track.contentHint = 'speech';
-    track.enabled = !(voice.muted || voice.deafened);
+    applyTrackEnabled();
     voice.analyser = analyserFor(track);
     peers.forEach((peer) => {
       const sender = peer.voiceTransceiver?.sender;
