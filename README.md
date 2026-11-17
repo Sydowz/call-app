@@ -39,7 +39,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 ## Limitações
 
 - Sem TURN: em algumas redes (NAT simétrico, redes corporativas, alguns 4G) a conexão P2P falha. O nome do participante aparece com "falha na conexão P2P".
-- Mesh: quem compartilha envia uma cópia do vídeo para cada pessoa. Com 6 pessoas isso dá até 5 envios, o que exige um bom upload.
+- Mesh: quem compartilha envia uma cópia do vídeo para cada pessoa *que está assistindo*. Com 6 pessoas isso dá até 5 envios, o que exige um bom upload.
 - Se cair a conexão com o servidor, é preciso recarregar a página (não há reconexão automática).
 
 ## Decisões técnicas
@@ -47,6 +47,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 - **HTML/JS embutidos no binário com `include_str!` em vez de `tower-http`**: uma dependência a menos e um binário único. A desvantagem é que qualquer mudança no HTML exige recompilar.
 - **ID da sala gerado no navegador (`crypto.getRandomValues`)**: o servidor não precisa do crate `rand`.
 - **Uma única transceiver de vídeo `sendrecv` por par, negociada uma vez só, por quem entra**: iniciar e parar o compartilhamento é só `replaceTrack()`, sem renegociação. Assim não há colisão de offers e o padrão "perfect negotiation" fica dispensável.
+- **Assistir sob demanda**: quem compartilha só envia o vídeo para quem clicou em "Assistir" (`replaceTrack` com a track para quem assiste e `null` para os outros). Assim ninguém codifica nem decodifica vídeo que não está sendo visto, o que pesa bastante para quem está jogando.
 - **O aviso "compartilhando/parou" vai pelo próprio WebSocket** em vez de um DataChannel. O servidor repassa esse aviso sem ler o conteúdo, como faz com o resto.
 - **`tokio::select!` num socket só, em vez de dividi-lo**: dispensa o crate `futures-util`.
 - **Erros com `Result` e `?` (`Box<dyn Error>` no `main`) em vez de `anyhow`**: o servidor só tem dois pontos de falha, abrir a porta e ler `PORT`.
