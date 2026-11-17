@@ -413,6 +413,21 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn quiet_connections_get_pinged() {
+        let addr = start_server().await;
+        let mut ws = connect(&addr, "quiet").await;
+        recv(&mut ws).await; // welcome
+                             // Nothing else happens in the room; time jumps ahead while idle.
+        loop {
+            match ws.next().await.expect("connection closed").unwrap() {
+                Message::Ping(_) => break,
+                Message::Close(_) => panic!("closed instead of pinging"),
+                _ => {}
+            }
+        }
+    }
+
     #[tokio::test]
     async fn participant_over_the_limit_gets_room_full() {
         let addr = start_server_with(Rooms::new(3)).await;
