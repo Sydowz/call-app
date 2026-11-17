@@ -519,6 +519,14 @@ function restartIce(peer) {
 
 // Fullscreen on desktop and Android; iPhone Safari only supports it on the
 // <video> element through its own webkit API. Phones also try landscape.
+function togglePip(video) {
+  if (document.pictureInPictureElement === video) {
+    document.exitPictureInPicture().catch(() => {});
+  } else {
+    video.requestPictureInPicture().catch((err) => console.warn('picture-in-picture', err));
+  }
+}
+
 function enterFullscreen(video) {
   const landscape = () => screen.orientation?.lock?.('landscape').catch(() => {});
   if (video.requestFullscreen) {
@@ -541,6 +549,7 @@ function removePeer(id) {
   const peer = peers.get(id);
   if (!peer) return;
   peer.pc.close();
+  if (document.pictureInPictureElement === peer.screen.video) document.exitPictureInPicture().catch(() => {});
   peer.screen.card.remove();
   peers.delete(id);
   refresh();
@@ -569,6 +578,7 @@ async function startShare() {
 // Our own preview is one more video to decode and paint, so it starts hidden.
 let previewOn = load('preview') === 'on';
 localScreen.watchBtn.textContent = 'Mostrar prévia';
+localScreen.pipBtn.remove(); // no point floating your own screen
 localScreen.unwatchBtn.textContent = 'Esconder prévia';
 localScreen.watchBtn.onclick = () => setPreview(true);
 localScreen.unwatchBtn.onclick = () => setPreview(false);
@@ -796,13 +806,18 @@ function buildScreen() {
   const hint = el('span', 'hint muted');
   const fullBtn = el('button', 'btn small', 'Tela cheia');
   fullBtn.onclick = () => enterFullscreen(video);
+  // Picture-in-Picture: a small always-on-top window, to watch while playing.
+  const pipBtn = el('button', 'btn small pip-btn', 'Janela flutuante');
+  pipBtn.onclick = () => togglePip(video);
+  video.addEventListener('enterpictureinpicture', () => (pipBtn.textContent = 'Fechar janela'));
+  video.addEventListener('leavepictureinpicture', () => (pipBtn.textContent = 'Janela flutuante'));
   const unwatchBtn = el('button', 'btn small');
   unwatchBtn.append(el('span', 'long', 'Parar de assistir'), el('span', 'short', 'Parar'));
   const foot = el('div', 'screen-foot');
-  foot.append(pill, hint, fullBtn, unwatchBtn);
+  foot.append(pill, hint, pipBtn, fullBtn, unwatchBtn);
   card.append(frame, foot);
   $('screens').append(card);
-  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, fullBtn, unwatchBtn };
+  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, pipBtn, fullBtn, unwatchBtn };
 }
 
 function peerStatus(peer) {
@@ -843,6 +858,11 @@ function personTile(person) {
 // `failedText` replaces both the video and the "Assistir" placeholder.
 function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false, failedText = '' }) {
   screen.fullBtn.hidden = !canUnwatch; // only for a screen you are watching
+  screen.pipBtn.hidden = !canUnwatch || !document.pictureInPictureEnabled;
+  // Close the floating window when that screen stops being watched.
+  if ((!visible || !watching || failedText) && document.pictureInPictureElement === screen.video) {
+    document.exitPictureInPicture().catch(() => {});
+  }
   screen.card.hidden = !visible;
   screen.video.hidden = !watching || !!failedText;
   screen.waiting.hidden = watching || !!failedText;
