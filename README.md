@@ -1,5 +1,7 @@
 # CPX Call
 
+![CPX Call: compartilhamento de tela e chat para a galera do servidor](assets/banner.png)
+
 Compartilhamento de tela entre amigos. Você abre o link, manda para a galera e cada um pode compartilhar a própria tela, com um chat de texto da sala. Não tem câmera nem conta.
 
 - Servidor em Rust (axum + tokio) que só retransmite a sinalização WebRTC por WebSocket.
@@ -17,6 +19,8 @@ cargo run --release
 ```
 
 Abra http://localhost:3000. Você cai no **lobby**: escolha seu nick, crie uma sala (com nome opcional) ou entre com um convite. As salas por onde você passa ficam em "Suas salas", com quantas pessoas estão em cada uma agora. Dentro da sala, "Convidar" copia uma mensagem pronta com o link (no celular, abre o compartilhamento do sistema). Variáveis opcionais: `PORT` (padrão 3000) e `MAX_PEERS` (pessoas por sala, padrão 12), por exemplo `PORT=8080 MAX_PEERS=20 cargo run --release`.
+
+![Sala do CPX Call: telas compartilhadas, chat e participantes](assets/screenshot.png)
 
 ## Testar
 
