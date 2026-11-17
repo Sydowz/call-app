@@ -53,3 +53,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 - **`tokio::select!` num socket só, em vez de dividi-lo**: dispensa o crate `futures-util`.
 - **Erros com `Result` e `?` (`Box<dyn Error>` no `main`) em vez de `anyhow`**: o servidor só tem dois pontos de falha, abrir a porta e ler `PORT`.
 - **`println!` em vez de `tracing`**: os logs mostram só o número do participante e os 6 primeiros caracteres da sala. Não registram IP nem o link completo.
+
+## Contribuir
+
+Contribuições são bem-vindas, sempre com revisão do mantenedor. Veja o [CONTRIBUTING.md](CONTRIBUTING.md).
