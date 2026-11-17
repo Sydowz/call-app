@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sala · Compartilhar tela</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+    header { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .75rem 1rem; background: #1d1d1d; }
+    header .spacer { flex: 1; }
+    button { font: inherit; padding: .4rem .9rem; cursor: pointer; }
+    input { font: inherit; width: 26rem; max-width: 60vw; }
+    .info { margin: .4rem 1rem; color: #aaa; }
+    #hint { color: #e0b050; }
+    #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: .75rem; padding: 1rem; }
+    .tile { background: #000; border: 1px solid #333; border-radius: 6px; overflow: hidden; }
+    .label { padding: .3rem .6rem; background: #222; font-size: .9rem; }
+    video { display: block; width: 100%; max-height: 80vh; object-fit: contain; background: #000; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Compartilhar tela</strong>
+    <button id="share" disabled>Compartilhar tela</button>
+    <button id="stop" hidden>Parar</button>
+    <span class="spacer"></span>
+    <label>Link da sala: <input id="link" readonly onfocus="this.select()"></label>
+    <button id="copy">Copiar</button>
+  </header>
+
+  <div id="status" class="info">Conectando…</div>
+  <div id="people" class="info"></div>
+  <div id="hint" class="info"></div>
+  <p id="empty" class="info">Ninguém está compartilhando a tela ainda. Dica: dê um duplo clique numa tela para vê-la em tela cheia.</p>
+
+  <main id="grid"></main>
+
+  <script src="/room.js"></script>
+</body>
+</html>

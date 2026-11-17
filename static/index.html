@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Compartilhar tela</title>
+</head>
+<body style="font-family: system-ui, sans-serif; background: #111; color: #eee">
+  <p>Criando sala…</p>
+  <noscript>Este app precisa de JavaScript.</noscript>
+  <script>
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    const id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    location.replace('/room/' + id);
+  </script>
+</body>
+</html>
