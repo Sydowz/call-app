@@ -56,7 +56,7 @@
     .side { width: 280px; flex: none; display: flex; flex-direction: column; gap: 12px; }
     .room { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
     .room h1 { margin: 0; font-size: 16px; font-weight: 600; }
-    #people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    #people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; }
     .chat { flex: 1; min-height: 0; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
     #chat-close { display: none; }
     #messages { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 4px 0 0; display: flex; flex-direction: column; }
@@ -103,6 +103,14 @@
     .tile .avatar { width: 64px; height: 64px; font-size: 18px; }
     .tile strong { font-weight: 600; max-width: 100%; }
     .tile .status { font-size: 12px; }
+    .tile > * { flex-shrink: 0; } /* never squash the name away */
+    .tile-text { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+    @media (min-width: 761px) {
+      /* Many people: avatar beside the name, so every card stays readable. */
+      #tiles.compact .tile { flex: none; min-height: 0; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 10px 12px; text-align: left; }
+      #tiles.compact .tile .avatar { width: 40px; height: 40px; font-size: 13px; }
+      #tiles.compact .tile-text { flex: 1 1 auto; align-items: flex-start; }
+    }
 
     .controls { flex: none; height: 72px; display: flex; align-items: center; justify-content: center; gap: 10px; }
 

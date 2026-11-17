@@ -42,7 +42,8 @@ async fn handle_socket(mut socket: WebSocket, room_id: String, rooms: Rooms) {
     match rooms.join(&room_id, tx) {
         Join::Full => {
             // Best effort: the browser may already be gone.
-            let _ = socket.send(text(&json!({ "type": "full" }))).await;
+            let full = json!({ "type": "full", "max": rooms.max_peers() });
+            let _ = socket.send(text(&full)).await;
             let _ = socket.send(Message::Close(None)).await;
         }
         Join::Joined { id, others } => {
@@ -61,7 +62,7 @@ async fn run(
     others: &[u32],
     mut rx: mpsc::UnboundedReceiver<String>,
 ) -> Result<(), axum::Error> {
-    let welcome = json!({ "type": "welcome", "id": id, "peers": others });
+    let welcome = json!({ "type": "welcome", "id": id, "peers": others, "max": rooms.max_peers() });
     socket.send(text(&welcome)).await?;
 
     loop {
