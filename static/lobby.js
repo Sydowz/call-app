@@ -31,25 +31,6 @@ $('edit').onclick = () => openProfileDialog({
 
 // ---------- criar / entrar ----------
 
-function slugify(text) {
-  return text.normalize('NFD').replace(/[̀-ͯ]/g, '') // "Sábado" -> "Sabado"
-    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-    .slice(0, 40).replace(/-+$/, '');
-}
-
-function randomChars(count, alphabet) {
-  return Array.from(crypto.getRandomValues(new Uint8Array(count)), (b) => alphabet[b % alphabet.length]).join('');
-}
-
-// A name gets a 6-character random suffix so strangers can't guess the room;
-// no name gives a fully random ID.
-function newRoomId(name) {
-  const slug = slugify(name);
-  return slug
-    ? `${slug}-${randomChars(6, 'abcdefghijklmnopqrstuvwxyz0123456789')}`
-    : randomChars(16, '0123456789abcdef');
-}
-
 // Accepts a full invite link or just the room code.
 function parseRoom(input) {
   const text = input.trim();
@@ -80,12 +61,6 @@ function timeAgo(at) {
   return ago.format(-Math.round(minutes / (24 * 60)), 'day');
 }
 
-function colorFor(id) {
-  let hash = 0;
-  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
-}
-
 function peopleText(id) {
   if (!(id in counts)) return ['…', 'muted'];
   const n = counts[id];
@@ -94,17 +69,18 @@ function peopleText(id) {
 }
 
 function roomItem(room) {
-  const name = roomName(room.id);
+  const name = displayRoomName(room.id);
   const li = el('li', 'room-item');
   const link = el('a', 'room-link');
   link.href = `/room/${room.id}`;
-  const icon = el('span', 'room-icon', '#');
+  const icon = el('span', 'room-icon', room.home ? '★' : '#');
   icon.style.background = colorFor(room.id);
   icon.setAttribute('aria-hidden', 'true');
   const text = el('span', 'room-text');
   const [people, cls] = peopleText(room.id);
   const meta = el('span', 'room-meta');
-  meta.append(el('span', cls, people), ` · ${room.pinned ? 'fixada · ' : ''}${timeAgo(room.at)}`);
+  const when = room.home ? 'sempre aqui' : `${room.pinned ? 'fixada · ' : ''}${timeAgo(room.at)}`;
+  meta.append(el('span', cls, people), ` · ${when}`);
   text.append(el('strong', 'ellipsis', name), meta);
   link.append(icon, text);
 
@@ -121,18 +97,19 @@ function roomItem(room) {
     saveRooms(loadRooms().filter((r) => r.id !== room.id));
     renderRooms();
   };
-  li.append(link, pin, remove);
+  li.append(link);
+  if (!room.home) li.append(pin, remove); // the fixed room can't be pinned or removed
   return li;
 }
 
 function renderRooms() {
-  const list = loadRooms().sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.at - a.at);
-  $('rooms-empty').hidden = list.length > 0;
+  const list = orderedRooms();
+  $('rooms-empty').hidden = list.length > 1;
   $('rooms').replaceChildren(...list.map(roomItem));
 }
 
 async function updateCounts() {
-  const ids = loadRooms().map((r) => r.id);
+  const ids = orderedRooms().map((r) => r.id);
   if (!ids.length || document.hidden) return;
   try {
     const res = await fetch(`/api/rooms?ids=${ids.join(',')}`, { cache: 'no-store' });
