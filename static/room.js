@@ -1,60 +1,119 @@
 'use strict';
 
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const MAX_PEERS = 6;
+const AVATAR_COLORS = ['#2E3A5C', '#5C3B3B', '#3B5C47', '#4A3B5C', '#5C4F3B', '#3B525C'];
 const roomId = location.pathname.split('/').pop();
+const canShare = !!navigator.mediaDevices?.getDisplayMedia;
 
 const $ = (id) => document.getElementById(id);
 const shareBtn = $('share');
-const stopBtn = $('stop');
-const statusEl = $('status');
-const peopleEl = $('people');
-const emptyEl = $('empty');
-const grid = $('grid');
 
+let ws = null; // set once we join; null means "not in the room yet"
 let myId = null;
+let myNick = loadNick();
 let localTrack = null; // our screen's video track while sharing
 let roomFull = false;
-const peers = new Map(); // id -> { id, pc, transceiver, sharing, queue, tile, label, video }
+let left = false;
+let timer = null;
+const peers = new Map(); // id -> { id, nick, pc, transceiver, sharing, queue, screen }
+const localScreen = buildScreen('Prévia da sua tela');
 
-const STATE_TEXT = {
-  new: 'conectando…',
-  connecting: 'conectando…',
-  disconnected: 'conexão instável…',
-  failed: 'falha na conexão P2P',
-  closed: 'desconectado',
-};
+// ---------- perfil (nick) ----------
 
-// ---------- link da sala ----------
-
-$('link').value = location.href;
-$('copy').onclick = () => {
-  $('link').select();
-  navigator.clipboard?.writeText(location.href).then(() => {
-    $('copy').textContent = 'Copiado!';
-    setTimeout(() => ($('copy').textContent = 'Copiar'), 1500);
-  }, () => {});
-};
-
-const canShare = !!navigator.mediaDevices?.getDisplayMedia;
-if (!canShare) {
-  $('hint').textContent =
-    'Este navegador só permite compartilhar a tela em HTTPS ou localhost (veja o README). Você ainda pode assistir.';
+function loadNick() {
+  try { return localStorage.getItem('nick') || ''; } catch { return ''; }
 }
+
+function saveNick(nick) {
+  try { localStorage.setItem('nick', nick); } catch { /* private mode: keep it in memory */ }
+}
+
+function cleanNick(value) {
+  return Array.from(String(value ?? '').trim()).slice(0, 32).join('');
+}
+
+function displayName(peer) {
+  return peer.nick || `Participante ${peer.id}`;
+}
+
+function initials(name) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const chars = words.length > 1
+    ? [Array.from(words[0])[0], Array.from(words[1])[0]]
+    : Array.from(words[0] ?? '?').slice(0, 2);
+  return chars.join('').toUpperCase();
+}
+
+function paintAvatar(el, name, id) {
+  el.textContent = initials(name || '?');
+  el.style.background = AVATAR_COLORS[((id ?? 1) - 1) % AVATAR_COLORS.length];
+}
+
+const profile = $('profile');
+const nickInput = $('nick-input');
+
+function openProfile() {
+  $('profile-title').textContent = ws ? 'Editar perfil' : 'Como seus amigos vão te ver?';
+  $('profile-submit').textContent = ws ? 'Salvar' : 'Entrar na sala';
+  nickInput.value = myNick;
+  updatePreview();
+  profile.showModal();
+}
+
+function updatePreview() {
+  paintAvatar($('preview-avatar'), cleanNick(nickInput.value), myId);
+}
+
+nickInput.oninput = updatePreview;
+profile.oncancel = (e) => {
+  if (!ws) e.preventDefault(); // a nick is required before joining
+};
+$('profile-form').onsubmit = (e) => {
+  e.preventDefault();
+  const nick = cleanNick(nickInput.value);
+  if (!nick) return;
+  myNick = nick;
+  saveNick(nick);
+  profile.close();
+  if (ws) {
+    peers.forEach((peer) => send(peer.id, { nick }));
+    refresh();
+  } else {
+    join();
+  }
+};
+$('edit').onclick = openProfile;
 
 // ---------- sinalização (WebSocket) ----------
 
-const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
+function join() {
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
+  ws.onmessage = onMessage;
+  ws.onclose = () => {
+    if (left) return;
+    shareBtn.disabled = true;
+    clearInterval(timer);
+    if (roomFull) {
+      showNotice('Sala cheia', `Esta sala já tem ${MAX_PEERS} pessoas. Tente de novo mais tarde ou crie outra.`);
+    } else {
+      showNotice('Conexão perdida', 'Você foi desconectado do servidor.');
+    }
+  };
+}
 
-ws.onmessage = (ev) => {
+function onMessage(ev) {
   const msg = JSON.parse(ev.data);
   switch (msg.type) {
-    case 'welcome':
+    case 'welcome': {
       myId = msg.id;
       shareBtn.disabled = !canShare;
-      updateStatus();
+      const joinedAt = Date.now();
+      timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
       for (const id of msg.peers) createPeer(id, true);
       refresh();
       break;
+    }
     case 'peer-joined':
       createPeer(msg.id, false); // the newcomer will send us the offer
       break;
@@ -70,17 +129,10 @@ ws.onmessage = (ev) => {
       roomFull = true;
       break;
   }
-};
-
-ws.onclose = () => {
-  shareBtn.disabled = true;
-  statusEl.textContent = roomFull
-    ? 'Sala cheia (máximo de 6 pessoas).'
-    : 'Desconectado do servidor. Recarregue a página para entrar de novo.';
-};
+}
 
 function send(to, data) {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ to, data }));
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ to, data }));
 }
 
 // Each negotiation step is async but they must run strictly in arrival order
@@ -94,14 +146,17 @@ function enqueue(peer, step) {
 
 function createPeer(id, initiator) {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  const peer = { id, pc, transceiver: null, sharing: false, queue: Promise.resolve() };
+  const peer = {
+    id, nick: '', pc, transceiver: null, sharing: false,
+    queue: Promise.resolve(),
+    screen: buildScreen('Tela cheia: duplo clique'),
+  };
   peers.set(id, peer);
-  buildTile(peer);
 
   pc.onicecandidate = (e) => {
     if (e.candidate) send(id, { candidate: e.candidate });
   };
-  pc.onconnectionstatechange = () => updateTile(peer);
+  pc.onconnectionstatechange = refresh;
 
   if (initiator) {
     // Whoever joins later sends the offer, so each pair negotiates exactly once.
@@ -115,7 +170,8 @@ function createPeer(id, initiator) {
     });
   }
 
-  updateTile(peer);
+  send(id, { nick: myNick });
+  refresh();
   return peer;
 }
 
@@ -123,7 +179,7 @@ function attachTransceiver(peer, transceiver) {
   peer.transceiver = transceiver;
   // The receiver track exists from the start; it simply has no frames until
   // the other side calls replaceTrack() with its screen.
-  peer.video.srcObject = new MediaStream([transceiver.receiver.track]);
+  peer.screen.video.srcObject = new MediaStream([transceiver.receiver.track]);
   if (localTrack) sendScreenTo(peer);
 }
 
@@ -144,7 +200,10 @@ async function handleSignal(peer, data) {
     await pc.addIceCandidate(data.candidate);
   } else if ('sharing' in data) {
     peer.sharing = !!data.sharing;
-    updateTile(peer);
+    refresh();
+  } else if ('nick' in data) {
+    peer.nick = cleanNick(data.nick);
+    refresh();
   }
 }
 
@@ -158,14 +217,16 @@ function removePeer(id) {
   const peer = peers.get(id);
   if (!peer) return;
   peer.pc.close();
-  peer.tile.remove();
+  peer.screen.card.remove();
   peers.delete(id);
   refresh();
 }
 
-// ---------- compartilhar / parar ----------
+// ---------- compartilhar / parar / sair ----------
 
-shareBtn.onclick = async () => {
+shareBtn.onclick = () => (localTrack ? stopShare() : startShare());
+
+async function startShare() {
   let stream;
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
@@ -176,62 +237,168 @@ shareBtn.onclick = async () => {
   // "text" makes the encoder keep resolution (sharp text) and drop frames instead.
   localTrack.contentHint = 'text';
   localTrack.onended = stopShare; // the browser's own "stop sharing" bar
+  localScreen.video.srcObject = new MediaStream([localTrack]);
   peers.forEach(sendScreenTo);
-  shareBtn.hidden = true;
-  stopBtn.hidden = false;
-  updateStatus();
-};
-
-stopBtn.onclick = stopShare;
+  refresh();
+}
 
 function stopShare() {
   if (!localTrack) return;
   localTrack.onended = null;
   localTrack.stop();
   localTrack = null;
+  localScreen.video.srcObject = null;
   peers.forEach(sendScreenTo);
-  shareBtn.hidden = false;
-  stopBtn.hidden = true;
-  updateStatus();
-}
-
-// ---------- interface ----------
-
-function buildTile(peer) {
-  peer.tile = document.createElement('div');
-  peer.tile.className = 'tile';
-  peer.label = document.createElement('div');
-  peer.label.className = 'label';
-  peer.video = document.createElement('video');
-  peer.video.autoplay = true;
-  peer.video.muted = true;
-  peer.video.playsInline = true;
-  peer.video.title = 'Duplo clique para tela cheia';
-  peer.video.ondblclick = () => peer.video.requestFullscreen?.();
-  peer.tile.append(peer.label, peer.video);
-  grid.append(peer.tile);
-}
-
-function updateTile(peer) {
-  const state = STATE_TEXT[peer.pc.connectionState];
-  peer.label.textContent = `Participante ${peer.id}` + (state ? ` (${state})` : '');
-  peer.tile.hidden = !peer.sharing;
-  if (peer.sharing) peer.video.play().catch(() => {});
   refresh();
 }
 
-function updateStatus() {
-  statusEl.textContent =
-    `Você é o Participante ${myId}.` + (localTrack ? ' Você está compartilhando sua tela.' : '');
+$('leave').onclick = () => {
+  left = true;
+  stopShare();
+  ws?.close();
+  clearInterval(timer);
+  [...peers.keys()].forEach(removePeer);
+  shareBtn.disabled = true;
+  showNotice('Você saiu da sala', 'O link continua valendo enquanto houver alguém na sala.');
+};
+
+// ---------- link da sala ----------
+
+async function copyLink() {
+  try {
+    await navigator.clipboard.writeText(location.href);
+    toast('Link copiado');
+  } catch {
+    window.prompt('Copie o link da sala:', location.href); // clipboard needs HTTPS
+  }
+}
+$('copy').onclick = copyLink;
+$('copy-side').onclick = copyLink;
+
+let toastTimer = null;
+function toast(text) {
+  const el = $('toast');
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), 2000);
+}
+
+const notice = $('notice');
+function showNotice(title, text) {
+  $('notice-title').textContent = title;
+  $('notice-text').textContent = text;
+  if (!notice.open) notice.showModal();
+}
+notice.oncancel = (e) => e.preventDefault(); // nothing usable behind it
+$('notice-retry').onclick = () => location.reload();
+
+// ---------- interface ----------
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text) node.textContent = text;
+  return node;
+}
+
+function elapsed(since) {
+  const s = Math.floor((Date.now() - since) / 1000);
+  return [s / 3600, (s % 3600) / 60, s % 60].map((n) => String(Math.floor(n)).padStart(2, '0')).join(':');
+}
+
+function buildScreen(hint) {
+  const card = el('div', 'screen card');
+  card.hidden = true;
+  const frame = el('div', 'frame');
+  const video = el('video');
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.title = 'Duplo clique para tela cheia';
+  video.ondblclick = () => video.requestFullscreen?.();
+  frame.append(video);
+  const pill = el('span', 'pill');
+  const foot = el('div', 'screen-foot');
+  foot.append(pill, el('span', 'hint muted', hint));
+  card.append(frame, foot);
+  $('screens').append(card);
+  return { card, video, pill };
+}
+
+function peerStatus(peer) {
+  switch (peer.pc.connectionState) {
+    case 'failed': return ['falha na conexão', 'warn'];
+    case 'disconnected': return ['conexão instável', 'warn'];
+    case 'connected': return peer.sharing ? ['compartilhando', 'live'] : ['na sala', 'muted'];
+    default: return ['conectando…', 'muted'];
+  }
+}
+
+function personRow(person) {
+  const li = el('li', 'row');
+  const avatar = el('div', 'avatar');
+  avatar.setAttribute('aria-hidden', 'true');
+  paintAvatar(avatar, person.name, person.id);
+  const name = el('span', 'ellipsis', person.name);
+  if (person.self) name.append(el('span', 'muted', ' (você)'));
+  li.append(avatar, name, el('span', `end ${person.status[1]}`, person.status[0]));
+  return li;
+}
+
+function personTile(person) {
+  const tile = el('div', person.self ? 'tile card self' : 'tile card');
+  const avatar = el('div', 'avatar');
+  avatar.setAttribute('aria-hidden', 'true');
+  paintAvatar(avatar, person.name, person.id);
+  const name = el('strong', 'ellipsis', person.name);
+  const status = person.self ? ['você', 'online'] : person.status;
+  tile.append(avatar, name, el('span', `status ${status[1]}`, status[0]));
+  return tile;
+}
+
+function showScreen(screen, visible, label) {
+  screen.card.hidden = !visible;
+  screen.pill.textContent = label;
+  if (visible && screen.video.paused) screen.video.play().catch(() => {});
 }
 
 function refresh() {
-  const list = [...peers.values()];
-  emptyEl.hidden = list.some((p) => p.sharing);
-  const names = list.map((p) => {
-    const state = STATE_TEXT[p.pc.connectionState];
-    return `Participante ${p.id}` + (state ? ` (${state})` : '');
-  });
-  peopleEl.textContent =
-    `Na sala (${list.length + 1}/6): você` + (names.length ? ', ' + names.join(', ') : '');
+  const list = [...peers.values()].sort((a, b) => a.id - b.id);
+  const me = {
+    self: true, id: myId, name: myNick,
+    status: localTrack ? ['compartilhando', 'live'] : ['na sala', 'online'],
+  };
+  const people = myId === null ? [] : [me, ...list.map((p) => ({ id: p.id, name: displayName(p), status: peerStatus(p) }))];
+
+  $('online').textContent = people.length ? `● ${people.length}/${MAX_PEERS} online` : '';
+  $('people').replaceChildren(...people.map(personRow));
+  $('tiles').replaceChildren(...people.map(personTile));
+
+  showScreen(localScreen, !!localTrack, '● Você está compartilhando');
+  for (const peer of list) showScreen(peer.screen, peer.sharing, `● ${displayName(peer)} está compartilhando`);
+  const shown = (localTrack ? 1 : 0) + list.filter((p) => p.sharing).length;
+  $('empty').hidden = shown > 0;
+  $('screens').style.setProperty('--cols', shown > 2 ? 2 : 1);
+  $('live').hidden = shown === 0;
+
+  paintAvatar($('me-avatar'), myNick, myId);
+  $('me-nick').textContent = myNick;
+  $('me-status').textContent = me.status[0] === 'na sala' ? 'Na sala' : 'Compartilhando';
+  $('me-status').className = me.status[1];
+
+  $('share-long').textContent = localTrack ? 'Parar compartilhamento' : 'Compartilhar tela';
+  $('share-short').textContent = localTrack ? 'Parar' : 'Tela';
 }
+
+// ---------- início ----------
+
+const shortId = roomId.slice(0, 8);
+$('room-tag').textContent = `# ${shortId}`;
+$('room-title').textContent = `Sala ${shortId}`;
+if (!canShare) {
+  shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
+  $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';
+}
+refresh();
+if (myNick) join(); else openProfile();
