@@ -16,8 +16,10 @@ let localTrack = null; // our screen's video track while sharing
 let roomFull = false;
 let left = false;
 let timer = null;
-const peers = new Map(); // id -> { id, nick, pc, transceiver, sharing, queue, screen }
-const localScreen = buildScreen('Prévia da sua tela');
+// id -> { id, nick, pc, transceiver, queue, screen,
+//         sharing (they share), iWatch (I watch them), watchesMe (they watch me) }
+const peers = new Map();
+const localScreen = buildScreen();
 
 // ---------- perfil (nick) ----------
 
@@ -147,10 +149,13 @@ function enqueue(peer, step) {
 function createPeer(id, initiator) {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const peer = {
-    id, nick: '', pc, transceiver: null, sharing: false,
+    id, nick: '', pc, transceiver: null,
+    sharing: false, iWatch: false, watchesMe: false,
     queue: Promise.resolve(),
-    screen: buildScreen('Tela cheia: duplo clique'),
+    screen: buildScreen(),
   };
+  peer.screen.watchBtn.onclick = () => setWatch(peer, true);
+  peer.screen.unwatchBtn.onclick = () => setWatch(peer, false);
   peers.set(id, peer);
 
   pc.onicecandidate = (e) => {
@@ -171,6 +176,7 @@ function createPeer(id, initiator) {
   }
 
   send(id, { nick: myNick });
+  if (localTrack) send(id, { sharing: true });
   refresh();
   return peer;
 }
@@ -180,7 +186,7 @@ function attachTransceiver(peer, transceiver) {
   // The receiver track exists from the start; it simply has no frames until
   // the other side calls replaceTrack() with its screen.
   peer.screen.video.srcObject = new MediaStream([transceiver.receiver.track]);
-  if (localTrack) sendScreenTo(peer);
+  sendScreenTo(peer); // in case they asked to watch before this was set up
 }
 
 async function handleSignal(peer, data) {
@@ -200,6 +206,12 @@ async function handleSignal(peer, data) {
     await pc.addIceCandidate(data.candidate);
   } else if ('sharing' in data) {
     peer.sharing = !!data.sharing;
+    if (!peer.sharing) peer.iWatch = false; // a new share starts unwatched
+    refresh();
+  } else if ('watch' in data) {
+    // Ignore a request that crossed with us stopping the share.
+    peer.watchesMe = !!data.watch && !!localTrack;
+    sendScreenTo(peer);
     refresh();
   } else if ('nick' in data) {
     peer.nick = cleanNick(data.nick);
@@ -207,10 +219,19 @@ async function handleSignal(peer, data) {
   }
 }
 
+// Video only flows to peers that clicked "Assistir": everyone else gets a null
+// track, so we don't encode for them and they don't decode anything.
 function sendScreenTo(peer) {
   if (!peer.transceiver) return; // attached later, once that peer's offer arrives
-  peer.transceiver.sender.replaceTrack(localTrack).catch((err) => console.warn(err));
-  send(peer.id, { sharing: !!localTrack });
+  const track = localTrack && peer.watchesMe ? localTrack : null;
+  if (peer.transceiver.sender.track === track) return;
+  peer.transceiver.sender.replaceTrack(track).catch((err) => console.warn(err));
+}
+
+function setWatch(peer, watch) {
+  peer.iWatch = watch;
+  send(peer.id, { watch });
+  refresh();
 }
 
 function removePeer(id) {
@@ -238,7 +259,7 @@ async function startShare() {
   localTrack.contentHint = 'text';
   localTrack.onended = stopShare; // the browser's own "stop sharing" bar
   localScreen.video.srcObject = new MediaStream([localTrack]);
-  peers.forEach(sendScreenTo);
+  peers.forEach((peer) => send(peer.id, { sharing: true })); // video only once they ask
   refresh();
 }
 
@@ -248,7 +269,11 @@ function stopShare() {
   localTrack.stop();
   localTrack = null;
   localScreen.video.srcObject = null;
-  peers.forEach(sendScreenTo);
+  peers.forEach((peer) => {
+    peer.watchesMe = false;
+    sendScreenTo(peer);
+    send(peer.id, { sharing: false });
+  });
   refresh();
 }
 
@@ -307,7 +332,7 @@ function elapsed(since) {
   return [s / 3600, (s % 3600) / 60, s % 60].map((n) => String(Math.floor(n)).padStart(2, '0')).join(':');
 }
 
-function buildScreen(hint) {
+function buildScreen() {
   const card = el('div', 'screen card');
   card.hidden = true;
   const frame = el('div', 'frame');
@@ -317,20 +342,28 @@ function buildScreen(hint) {
   video.playsInline = true;
   video.title = 'Duplo clique para tela cheia';
   video.ondblclick = () => video.requestFullscreen?.();
-  frame.append(video);
+  const waiting = el('div', 'waiting');
+  const waitingText = el('span');
+  const watchBtn = el('button', 'btn primary', 'Assistir');
+  waiting.append(waitingText, watchBtn);
+  frame.append(video, waiting);
   const pill = el('span', 'pill');
+  const hint = el('span', 'hint muted');
+  const unwatchBtn = el('button', 'btn small', 'Parar de assistir');
   const foot = el('div', 'screen-foot');
-  foot.append(pill, el('span', 'hint muted', hint));
+  foot.append(pill, hint, unwatchBtn);
   card.append(frame, foot);
   $('screens').append(card);
-  return { card, video, pill };
+  return { card, video, waiting, waitingText, watchBtn, pill, hint, unwatchBtn };
 }
 
 function peerStatus(peer) {
   switch (peer.pc.connectionState) {
     case 'failed': return ['falha na conexão', 'warn'];
     case 'disconnected': return ['conexão instável', 'warn'];
-    case 'connected': return peer.sharing ? ['compartilhando', 'live'] : ['na sala', 'muted'];
+    case 'connected':
+      if (peer.sharing) return ['compartilhando', 'live'];
+      return peer.watchesMe ? ['assistindo você', 'online'] : ['na sala', 'muted'];
     default: return ['conectando…', 'muted'];
   }
 }
@@ -357,10 +390,16 @@ function personTile(person) {
   return tile;
 }
 
-function showScreen(screen, visible, label) {
+// `watching` false shows the "Assistir" placeholder instead of the video.
+function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false }) {
   screen.card.hidden = !visible;
+  screen.video.hidden = !watching;
+  screen.waiting.hidden = watching;
+  screen.waitingText.textContent = waitingText;
   screen.pill.textContent = label;
-  if (visible && screen.video.paused) screen.video.play().catch(() => {});
+  screen.hint.textContent = hint;
+  screen.unwatchBtn.hidden = !canUnwatch;
+  if (visible && watching && screen.video.paused) screen.video.play().catch(() => {});
 }
 
 function refresh() {
@@ -375,8 +414,24 @@ function refresh() {
   $('people').replaceChildren(...people.map(personRow));
   $('tiles').replaceChildren(...people.map(personTile));
 
-  showScreen(localScreen, !!localTrack, '● Você está compartilhando');
-  for (const peer of list) showScreen(peer.screen, peer.sharing, `● ${displayName(peer)} está compartilhando`);
+  const viewers = list.filter((p) => p.watchesMe).length;
+  showScreen(localScreen, {
+    visible: !!localTrack,
+    watching: true,
+    label: '● Você está compartilhando',
+    hint: viewers === 0 ? 'ninguém assistindo' : viewers === 1 ? '1 pessoa assistindo' : `${viewers} pessoas assistindo`,
+  });
+  for (const peer of list) {
+    const name = displayName(peer);
+    showScreen(peer.screen, {
+      visible: peer.sharing,
+      watching: peer.iWatch,
+      label: `● ${name} está compartilhando`,
+      hint: peer.iWatch ? 'Tela cheia: duplo clique' : 'O vídeo só chega para quem assiste',
+      waitingText: `${name} está compartilhando a tela`,
+      canUnwatch: peer.iWatch,
+    });
+  }
   const shown = (localTrack ? 1 : 0) + list.filter((p) => p.sharing).length;
   $('empty').hidden = shown > 0;
   $('screens').style.setProperty('--cols', shown > 2 ? 2 : 1);
