@@ -142,7 +142,10 @@ async function handleSignal(peer, data) {
     peer.sharing = !!data.sharing;
     peer.hasAudio = peer.sharing && !!data.audio;
     if (!peer.sharing) peer.iWatch = false; // a new share starts unwatched
-    if (started) addSystem(`${displayName(peer)} começou a compartilhar a tela`);
+    if (started) {
+      addSystem(`${displayName(peer)} começou a compartilhar a tela`);
+      notify(`${displayName(peer)} começou a compartilhar a tela`, `Sala ${displayRoomName(roomId)}`, `share-${peer.id}`);
+    }
     refresh();
   } else if ('chat' in data) {
     const text = cleanChat(data.chat);

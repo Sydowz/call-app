@@ -50,6 +50,7 @@ const ROOM_JS: &str = concat!(
     include_str!("../static/room/voz.js"),
     include_str!("../static/room/ptt.js"),
     include_str!("../static/room/chat.js"),
+    include_str!("../static/room/notificacoes.js"),
     include_str!("../static/room/lateral.js"),
     include_str!("../static/room/interface.js"),
     include_str!("../static/room/inicio.js"),
