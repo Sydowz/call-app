@@ -140,10 +140,49 @@ $('profile-form').onsubmit = (e) => {
     peers.forEach((peer) => send(peer.id, profileMsg()));
     refresh();
   } else {
-    join();
+    enterRoom();
   }
 };
 $('edit').onclick = openProfile;
+
+// ---------- uma aba por sala ----------
+
+// Opening the same room in a second tab would make you appear twice. One Web
+// Lock per room (shared by all tabs of this browser) detects that: the new tab
+// can "steal" it, which makes the old tab's request reject so it leaves.
+const ROOM_LOCK = `friends-call-room:${roomId}`;
+let releaseLock = null;
+
+function enterRoom(takeover = false) {
+  if (!navigator.locks) { // no Web Locks outside HTTPS/localhost: just join
+    join();
+    return;
+  }
+  navigator.locks.request(ROOM_LOCK, takeover ? { steal: true } : { ifAvailable: true }, (lock) => {
+    if (!lock) {
+      showNotice('Você já está nesta sala', 'Ela está aberta em outra aba deste navegador.', {
+        label: 'Usar esta aba',
+        run: () => {
+          notice.close();
+          enterRoom(true);
+        },
+      });
+      return undefined;
+    }
+    join();
+    return new Promise((resolve) => (releaseLock = resolve)); // held until we leave
+  }).catch((err) => {
+    if (err.name !== 'AbortError') return;
+    leaveRoom('Sala aberta em outra aba', 'Você continuou nesta sala em outra aba deste navegador.', {
+      label: 'Usar esta aba',
+      run: () => {
+        // This page's state is torn down: reload and steal the room back.
+        try { sessionStorage.setItem('takeover', '1'); } catch { /* falls back to the "Usar esta aba" prompt */ }
+        location.reload();
+      },
+    });
+  });
+}
 
 // ---------- sinalização (WebSocket) ----------
 
@@ -336,15 +375,18 @@ function stopShare() {
   refresh();
 }
 
-$('leave').onclick = () => {
+function leaveRoom(title, text, action) {
   left = true;
   stopShare();
   ws?.close();
   clearInterval(timer);
   [...peers.keys()].forEach(removePeer);
   shareBtn.disabled = true;
-  showNotice('Você saiu da sala', 'O link continua valendo enquanto houver alguém na sala.');
-};
+  releaseLock?.();
+  showNotice(title, text, action);
+}
+
+$('leave').onclick = () => leaveRoom('Você saiu da sala', 'O link continua valendo enquanto houver alguém na sala.');
 
 // ---------- link da sala ----------
 
@@ -369,13 +411,18 @@ function toast(text) {
 }
 
 const notice = $('notice');
-function showNotice(title, text) {
+const RELOAD = { label: 'Entrar de novo', run: () => location.reload() };
+let noticeAction = RELOAD.run;
+
+function showNotice(title, text, action = RELOAD) {
   $('notice-title').textContent = title;
   $('notice-text').textContent = text;
+  $('notice-retry').textContent = action.label;
+  noticeAction = action.run;
   if (!notice.open) notice.showModal();
 }
 notice.oncancel = (e) => e.preventDefault(); // nothing usable behind it
-$('notice-retry').onclick = () => location.reload();
+$('notice-retry').onclick = () => noticeAction();
 
 // ---------- interface ----------
 
@@ -516,4 +563,9 @@ if (!canShare) {
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';
 }
 refresh();
-if (myNick) join(); else openProfile();
+let takeover = false;
+try {
+  takeover = sessionStorage.getItem('takeover') === '1';
+  sessionStorage.removeItem('takeover');
+} catch { /* storage blocked: no takeover */ }
+if (myNick) enterRoom(takeover); else openProfile();
