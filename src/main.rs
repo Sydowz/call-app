@@ -40,7 +40,19 @@ const DEFAULT_PORT: u16 = 3000;
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const ROOM_HTML: &str = include_str!("../static/room.html");
-const ROOM_JS: &str = include_str!("../static/room.js");
+// The room script is kept as one file per area under static/room/ and served as a
+// single /room.js (same global scope, same order), so the page loads exactly one script.
+const ROOM_JS: &str = concat!(
+    include_str!("../static/room/estado.js"),
+    include_str!("../static/room/sessao.js"),
+    include_str!("../static/room/webrtc.js"),
+    include_str!("../static/room/compartilhar.js"),
+    include_str!("../static/room/voz.js"),
+    include_str!("../static/room/chat.js"),
+    include_str!("../static/room/lateral.js"),
+    include_str!("../static/room/interface.js"),
+    include_str!("../static/room/inicio.js"),
+);
 const LOBBY_JS: &str = include_str!("../static/lobby.js");
 const COMMON_JS: &str = include_str!("../static/common.js");
 const COMMON_CSS: &str = include_str!("../static/common.css");

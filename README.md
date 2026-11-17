@@ -53,6 +53,8 @@ O servidor gera credenciais temporárias (24 h) pela API da Cloudflare e as entr
 
 ## Desenvolvimento
 
+O script da sala fica dividido por assunto em `static/room/` (estado, sessão/sinalização, WebRTC, compartilhar, voz, chat, lateral, interface, início). O servidor junta os arquivos, na ordem de `ROOM_JS` em `src/main.rs`, e entrega tudo como um único `/room.js`; os arquivos compartilham o mesmo escopo, como antes. Arquivo novo precisa entrar nessa lista.
+
 ```sh
 cargo fmt                                  # formata
 cargo clippy --all-targets -- -D warnings  # lints (deve passar sem avisos)
