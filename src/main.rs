@@ -29,10 +29,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .map_err(|_| format!("PORT inválida: {value:?}"))?,
         Err(_) => DEFAULT_PORT,
     };
+    let max_peers = match std::env::var("MAX_PEERS") {
+        Ok(value) => value
+            .parse()
+            .ok()
+            .filter(|&n: &usize| n >= 2)
+            .ok_or_else(|| format!("MAX_PEERS inválido (mínimo 2): {value:?}"))?,
+        Err(_) => rooms::DEFAULT_MAX_PEERS,
+    };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
-    println!("Servidor em http://localhost:{port}");
-    axum::serve(listener, app(Rooms::default())).await?;
+    println!("Servidor em http://localhost:{port} (até {max_peers} pessoas por sala)");
+    axum::serve(listener, app(Rooms::new(max_peers))).await?;
     Ok(())
 }
 
@@ -71,9 +79,13 @@ mod tests {
     type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
     async fn start_server() -> String {
+        start_server_with(Rooms::default()).await
+    }
+
+    async fn start_server_with(rooms: Rooms) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app(Rooms::default())).await });
+        tokio::spawn(async move { axum::serve(listener, app(rooms)).await });
         format!("127.0.0.1:{}", addr.port())
     }
 
@@ -131,13 +143,13 @@ mod tests {
         let mut a = connect(&addr, "room1").await;
         assert_eq!(
             recv(&mut a).await,
-            json!({ "type": "welcome", "id": 1, "peers": [] })
+            json!({ "type": "welcome", "id": 1, "peers": [], "max": rooms::DEFAULT_MAX_PEERS })
         );
 
         let mut b = connect(&addr, "room1").await;
         assert_eq!(
             recv(&mut b).await,
-            json!({ "type": "welcome", "id": 2, "peers": [1] })
+            json!({ "type": "welcome", "id": 2, "peers": [1], "max": rooms::DEFAULT_MAX_PEERS })
         );
         assert_eq!(
             recv(&mut a).await,
@@ -160,17 +172,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seventh_participant_gets_room_full() {
-        let addr = start_server().await;
+    async fn participant_over_the_limit_gets_room_full() {
+        let addr = start_server_with(Rooms::new(3)).await;
         let mut clients = Vec::new();
-        for _ in 0..rooms::MAX_PEERS {
+        for _ in 0..3 {
             let mut ws = connect(&addr, "busy").await;
             recv(&mut ws).await;
             clients.push(ws);
         }
 
         let mut extra = connect(&addr, "busy").await;
-        assert_eq!(recv(&mut extra).await, json!({ "type": "full" }));
+        assert_eq!(recv(&mut extra).await, json!({ "type": "full", "max": 3 }));
         assert!(matches!(
             extra.next().await,
             Some(Ok(Message::Close(_))) | None

@@ -8,7 +8,9 @@ use std::{
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-pub const MAX_PEERS: usize = 6;
+/// Room size when `MAX_PEERS` is not set. In a mesh, whoever shares encodes
+/// once per viewer, so much bigger rooms would need a media server (SFU).
+pub const DEFAULT_MAX_PEERS: usize = 12;
 
 /// Sends text messages to one participant's WebSocket task.
 pub type Tx = mpsc::UnboundedSender<String>;
@@ -20,8 +22,17 @@ struct Room {
 }
 
 /// All rooms, shared between connections. Cloning only clones the `Arc`.
-#[derive(Clone, Default)]
-pub struct Rooms(Arc<Mutex<HashMap<String, Room>>>);
+#[derive(Clone)]
+pub struct Rooms {
+    rooms: Arc<Mutex<HashMap<String, Room>>>,
+    max_peers: usize,
+}
+
+impl Default for Rooms {
+    fn default() -> Self {
+        Self::new(DEFAULT_MAX_PEERS)
+    }
+}
 
 /// Outcome of trying to enter a room.
 #[derive(Debug, PartialEq)]
@@ -35,10 +46,21 @@ pub enum Join {
 }
 
 impl Rooms {
+    pub fn new(max_peers: usize) -> Self {
+        Self {
+            rooms: Arc::default(),
+            max_peers,
+        }
+    }
+
+    pub fn max_peers(&self) -> usize {
+        self.max_peers
+    }
+
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Room>> {
         // Every change under the lock is a single insert/remove, so a panic
         // elsewhere can't leave the map half-updated: just keep using it.
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Adds a participant to the room (creating the room if needed) and tells
@@ -47,7 +69,7 @@ impl Rooms {
         let (id, others, count) = {
             let mut rooms = self.lock();
             let room = rooms.entry(room_id.to_owned()).or_default();
-            if room.peers.len() >= MAX_PEERS {
+            if room.peers.len() >= self.max_peers {
                 drop(rooms);
                 println!("[sala {}] entrada recusada: sala cheia", short(room_id));
                 return Join::Full;
@@ -67,8 +89,9 @@ impl Rooms {
         // before any offer it could send: the others always learn of it first.
         broadcast(&others, &json!({ "type": "peer-joined", "id": id }));
         println!(
-            "[sala {}] participante {id} entrou ({count}/{MAX_PEERS})",
-            short(room_id)
+            "[sala {}] participante {id} entrou ({count}/{})",
+            short(room_id),
+            self.max_peers
         );
         Join::Joined {
             id,
@@ -111,9 +134,10 @@ impl Rooms {
 
         broadcast(&remaining, &json!({ "type": "peer-left", "id": id }));
         println!(
-            "[sala {}] participante {id} saiu ({}/{MAX_PEERS})",
+            "[sala {}] participante {id} saiu ({}/{})",
             short(room_id),
-            remaining.len()
+            remaining.len(),
+            self.max_peers
         );
         if remaining.is_empty() {
             println!("[sala {}] vazia, apagada", short(room_id));
@@ -197,16 +221,25 @@ mod tests {
 
     #[test]
     fn room_is_full_after_max_peers() {
-        let rooms = Rooms::default();
-        let receivers: Vec<_> = (0..MAX_PEERS)
-            .map(|_| {
-                let (tx, rx) = peer();
-                assert!(matches!(rooms.join("r", tx), Join::Joined { .. }));
-                rx
-            })
-            .collect();
-        assert_eq!(rooms.join("r", peer().0), Join::Full);
-        drop(receivers);
+        for max in [3, DEFAULT_MAX_PEERS] {
+            let rooms = Rooms::new(max);
+            assert_eq!(rooms.max_peers(), max);
+            let receivers: Vec<_> = (0..max)
+                .map(|_| {
+                    let (tx, rx) = peer();
+                    assert!(matches!(rooms.join("r", tx), Join::Joined { .. }));
+                    rx
+                })
+                .collect();
+            assert_eq!(rooms.join("r", peer().0), Join::Full);
+            drop(receivers);
+        }
+    }
+
+    #[test]
+    fn default_allows_more_than_six() {
+        assert_eq!(Rooms::default().max_peers(), DEFAULT_MAX_PEERS);
+        const _: () = assert!(DEFAULT_MAX_PEERS > 6);
     }
 
     #[test]
