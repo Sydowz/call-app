@@ -63,7 +63,7 @@ async function photoFromFile(file) {
 }
 
 function profileMsg() {
-  return { nick: myNick, photo: myPhoto };
+  return { nick: myNick, photo: myPhoto, hwH264 };
 }
 
 function cleanNick(value) {
@@ -186,7 +186,8 @@ function enterRoom(takeover = false) {
 
 // ---------- sinalização (WebSocket) ----------
 
-function join() {
+async function join() {
+  hwH264 = await hwH264Ready; // must be in the first profile we send
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
   ws.onmessage = onMessage;
   ws.onclose = () => {
@@ -228,7 +229,10 @@ function onMessage(ev) {
     }
     case 'signal': {
       const peer = peers.get(msg.from) ?? createPeer(msg.from, false);
-      enqueue(peer, () => handleSignal(peer, msg.data));
+      // Profiles don't depend on negotiation order, and our offer waits for
+      // theirs (codec choice), so they skip the queue.
+      if (msg.data && typeof msg.data === 'object' && 'nick' in msg.data) handleProfile(peer, msg.data);
+      else enqueue(peer, () => handleSignal(peer, msg.data));
       break;
     }
     case 'full':
@@ -257,9 +261,11 @@ function createPeer(id, initiator) {
     id, nick: '', photo: '', pc, transceiver: null,
     sharing: false, iWatch: false, watchesMe: false,
     announced: initiator, // people already here when we joined don't get an "entrou" line
+    hwH264: false,
     queue: Promise.resolve(),
     screen: buildScreen(),
   };
+  peer.profileKnown = new Promise((resolve) => (peer.resolveProfile = resolve));
   peer.screen.watchBtn.onclick = () => setWatch(peer, true);
   peer.screen.unwatchBtn.onclick = () => setWatch(peer, false);
   peers.set(id, peer);
@@ -274,8 +280,12 @@ function createPeer(id, initiator) {
     // One "sendrecv" video transceiver carries a screen in each direction;
     // starting or stopping a share later is just replaceTrack(), with no
     // renegotiation (and therefore no colliding offers between two peers).
-    attachTransceiver(peer, pc.addTransceiver('video', { direction: 'sendrecv' }));
+    const transceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
+    attachTransceiver(peer, transceiver);
     enqueue(peer, async () => {
+      // Their profile says what they encode well; give up waiting after 3s.
+      await Promise.race([peer.profileKnown, new Promise((r) => setTimeout(r, 3000))]);
+      preferCodecs(transceiver, peer);
       await pc.setLocalDescription(); // creates the offer implicitly
       send(id, { description: pc.localDescription });
     });
@@ -285,6 +295,46 @@ function createPeer(id, initiator) {
   if (localTrack) send(id, { sharing: true });
   refresh();
   return peer;
+}
+
+// Codec choice. A sender uses the first codec of the *other* side's list, so
+// each side orders its list by what the remote can encode well:
+// - H.264 first only if the remote encodes it on the GPU (NVENC, AMF,
+//   QuickSync: barely touches a running game) and we are not Firefox, whose
+//   H.264 needs a separately downloaded plugin that may be missing.
+// - Otherwise VP8 first: it works everywhere, and software H.264 is no lighter.
+const isFirefox = /firefox/i.test(navigator.userAgent);
+let hwH264 = false; // sent to the others with our profile
+const hwH264Ready = detectHwH264();
+
+async function detectHwH264() {
+  if (isFirefox || !navigator.mediaCapabilities?.encodingInfo) return false;
+  try {
+    const info = await navigator.mediaCapabilities.encodingInfo({
+      type: 'webrtc',
+      video: { contentType: 'video/H264', width: 1920, height: 1080, bitrate: 2_500_000, framerate: 30 },
+    });
+    return info.supported && info.powerEfficient;
+  } catch {
+    return false;
+  }
+}
+
+function preferCodecs(transceiver, peer) {
+  const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs;
+  if (!transceiver.setCodecPreferences || !codecs) return;
+  const mime = (c) => c.mimeType.toLowerCase();
+  const wantH264 = peer.hwH264 && !isFirefox && codecs.some((c) => mime(c) === 'video/h264');
+  const rank = (c) => {
+    if (mime(c) === 'video/h264') return wantH264 ? 0 : 2;
+    if (mime(c) === 'video/vp8') return wantH264 ? 1 : 0;
+    return 1; // VP9/AV1 (CPU-heavy) after VP8; rtx/red/ulpfec ride along
+  };
+  try {
+    transceiver.setCodecPreferences([...codecs].sort((a, b) => rank(a) - rank(b)));
+  } catch (err) {
+    console.warn('codec preferences', err);
+  }
 }
 
 function attachTransceiver(peer, transceiver) {
@@ -304,6 +354,7 @@ async function handleSignal(peer, data) {
       // switch it to "sendrecv" so we can share our screen back later.
       const transceiver = pc.getTransceivers()[0];
       transceiver.direction = 'sendrecv';
+      preferCodecs(transceiver, peer); // their profile arrived before the offer
       await pc.setLocalDescription(); // creates the answer implicitly
       send(peer.id, { description: pc.localDescription });
       attachTransceiver(peer, transceiver);
@@ -324,15 +375,19 @@ async function handleSignal(peer, data) {
     peer.watchesMe = !!data.watch && !!localTrack;
     sendScreenTo(peer);
     refresh();
-  } else if ('nick' in data) {
-    peer.nick = cleanNick(data.nick);
-    peer.photo = validPhoto(data.photo);
-    if (!peer.announced) {
-      peer.announced = true; // wait for the nick so the line has a name
-      addSystem(`${displayName(peer)} entrou`);
-    }
-    refresh();
   }
+}
+
+function handleProfile(peer, data) {
+  peer.nick = cleanNick(data.nick);
+  peer.photo = validPhoto(data.photo);
+  peer.hwH264 = data.hwH264 === true;
+  peer.resolveProfile();
+  if (!peer.announced) {
+    peer.announced = true; // wait for the nick so the line has a name
+    addSystem(`${displayName(peer)} entrou`);
+  }
+  refresh();
 }
 
 // Video only flows to peers that clicked "Assistir": everyone else gets a null
