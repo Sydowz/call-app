@@ -1,4 +1,4 @@
-# call-app
+# CPX Call
 
 Compartilhamento de tela entre amigos. Você abre o link, manda para a galera e cada um pode compartilhar a própria tela, com um chat de texto da sala. Não tem câmera nem conta.
 
