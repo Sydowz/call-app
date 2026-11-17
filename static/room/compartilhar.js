@@ -9,18 +9,97 @@ const MODES = {
 };
 let shareMode = load('shareMode') === 'texto' ? 'texto' : 'jogo';
 
-function captureConstraints() {
+// ---------- ajuste automático (PC no limite) ----------
+
+// Some PCs heat up after minutes of game + encoding and the game starts to
+// stutter. Every 5s we read what the encoder reports: if it says it is
+// CPU-limited for ~15s, the stream steps down one level (and the sharer is
+// told); after 2 calm minutes it steps back up. With 3+ people watching (one
+// encode each in a mesh), Jogo already starts one level down. Frame-rate
+// drops alone don't count: a still screen (a game menu) also sends fewer
+// frames while the PC is fine.
+const LEVELS = [
+  { fps: 30, maxHeight: 720 },
+  { fps: 24, maxHeight: 720 },
+  { fps: 24, maxHeight: 540 },
+  { fps: 20, maxHeight: 480 },
+];
+const ADAPT_EVERY_MS = 5000;
+const STRIKES_TO_STEP_DOWN = 3; // ~15s CPU-limited
+const CALM_TO_STEP_UP = 24; // ~2 min fine
+let adaptLevel = 0;
+let strikes = 0;
+let calm = 0;
+
+function viewerCount() {
+  return [...peers.values()].filter((p) => p.watchesMe).length;
+}
+
+function currentCaps() {
   const mode = MODES[shareMode];
-  return { frameRate: { ideal: mode.fps, max: mode.fps }, height: { max: mode.maxHeight } };
+  if (shareMode !== 'jogo') return { fps: mode.fps, maxHeight: mode.maxHeight };
+  const extra = viewerCount() >= 3 ? 1 : 0;
+  return LEVELS[Math.min(LEVELS.length - 1, adaptLevel + extra)];
+}
+
+function retune() {
+  if (!localTrack) return;
+  localTrack.applyConstraints(captureConstraints())
+    .catch(() => { /* capture caps are best effort; the encoder caps still apply */ })
+    .finally(() => peers.forEach(tuneSender));
+  refresh();
+}
+
+// One step of the controller; `limited` = the encoder reported CPU limits.
+function adaptQuality(limited) {
+  const before = currentCaps();
+  if (limited) {
+    calm = 0;
+    if (++strikes >= STRIKES_TO_STEP_DOWN && adaptLevel < LEVELS.length - 1) {
+      adaptLevel++;
+      strikes = 0;
+    }
+  } else {
+    strikes = 0;
+    if (++calm >= CALM_TO_STEP_UP && adaptLevel > 0) {
+      adaptLevel--;
+      calm = 0;
+    }
+  }
+  const after = currentCaps();
+  if (after.fps === before.fps && after.maxHeight === before.maxHeight) return;
+  retune();
+  if (after.fps < before.fps || after.maxHeight < before.maxHeight) {
+    toast(`Seu PC está no limite: a transmissão foi para ${after.maxHeight}p a ${after.fps} FPS para não travar o jogo. Volta sozinha quando aliviar.`, 7000);
+  }
+}
+
+setInterval(async () => {
+  if (!localTrack || shareMode !== 'jogo') return;
+  let limited = false;
+  let sending = false;
+  for (const peer of peers.values()) {
+    if (!peer.transceiver?.sender.track) continue;
+    sending = true;
+    (await peer.transceiver.sender.getStats()).forEach((s) => {
+      if (s.type === 'outbound-rtp' && s.qualityLimitationReason === 'cpu') limited = true;
+    });
+  }
+  if (sending) adaptQuality(limited);
+}, ADAPT_EVERY_MS);
+
+function captureConstraints() {
+  const caps = currentCaps();
+  return { frameRate: { ideal: caps.fps, max: caps.fps }, height: { max: caps.maxHeight } };
 }
 
 function encoderSettings(sender) {
-  const mode = MODES[shareMode];
-  const height = sender.track.getSettings().height || mode.maxHeight;
+  const caps = currentCaps();
+  const height = sender.track.getSettings().height || caps.maxHeight;
   return {
-    maxBitrate: mode.bitrate,
-    maxFramerate: mode.fps,
-    scaleResolutionDownBy: Math.max(1, height / mode.maxHeight),
+    maxBitrate: MODES[shareMode].bitrate,
+    maxFramerate: caps.fps,
+    scaleResolutionDownBy: Math.max(1, height / caps.maxHeight),
   };
 }
 
@@ -217,6 +296,9 @@ function setPreview(on) {
 
 function stopShare() {
   if (!localTrack) return;
+  adaptLevel = 0;
+  strikes = 0;
+  calm = 0;
   localTrack.onended = null;
   localTrack.stop();
   localTrack = null;

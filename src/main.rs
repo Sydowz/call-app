@@ -59,6 +59,7 @@ const ROOM_JS: &str = concat!(
 const LOBBY_JS: &str = include_str!("../static/lobby.js");
 const COMMON_JS: &str = include_str!("../static/common.js");
 const COMMON_CSS: &str = include_str!("../static/common.css");
+const THEME_JS: &str = include_str!("../static/theme.js");
 const FAVICON_SVG: &str = include_str!("../static/favicon.svg");
 const TOUCH_ICON_PNG: &[u8] = include_bytes!("../static/apple-touch-icon.png");
 
@@ -103,6 +104,7 @@ fn app(rooms: Rooms, ice: Arc<Ice>) -> Router {
         .route("/room.js", get(|| async { javascript(ROOM_JS) }))
         .route("/lobby.js", get(|| async { javascript(LOBBY_JS) }))
         .route("/common.js", get(|| async { javascript(COMMON_JS) }))
+        .route("/theme.js", get(|| async { javascript(THEME_JS) }))
         .route(
             "/common.css",
             get(|| async {
@@ -270,6 +272,7 @@ mod tests {
             .contains("content-type: text/javascript"));
         assert!(get("/common.js").await.contains("text/javascript"));
         assert!(get("/lobby.js").await.contains("text/javascript"));
+        assert!(get("/theme.js").await.contains("text/javascript"));
         assert!(get("/common.css").await.contains("content-type: text/css"));
         assert!(get("/favicon.svg")
             .await
@@ -423,6 +426,21 @@ mod tests {
             serde_json::from_str::<Value>(body).unwrap(),
             json!({ "countme": 1, "empty": 0 })
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn quiet_connections_get_pinged() {
+        let addr = start_server().await;
+        let mut ws = connect(&addr, "quiet").await;
+        recv(&mut ws).await; // welcome
+                             // Nothing else happens in the room; time jumps ahead while idle.
+        loop {
+            match ws.next().await.expect("connection closed").unwrap() {
+                Message::Ping(_) => break,
+                Message::Close(_) => panic!("closed instead of pinging"),
+                _ => {}
+            }
+        }
     }
 
     #[tokio::test]

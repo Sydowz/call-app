@@ -150,7 +150,7 @@ function refresh() {
     visible: !!localTrack,
     watching: previewOn,
     label: '● Você está compartilhando',
-    hint: `${viewers === 0 ? 'ninguém assistindo' : viewers === 1 ? '1 pessoa assistindo' : `${viewers} pessoas assistindo`} · ${localAudio ? 'com som' : 'sem som'}`,
+    hint: `${viewers === 0 ? 'ninguém assistindo' : viewers === 1 ? '1 pessoa assistindo' : `${viewers} pessoas assistindo`} · ${localAudio ? 'com som' : 'sem som'}${shareMode === 'jogo' && (currentCaps().fps < 30 || currentCaps().maxHeight < 720) ? ` · ${currentCaps().maxHeight}p ${currentCaps().fps} FPS (ajuste automático)` : ''}`,
     waitingText: 'Sua tela está indo para quem clicar em Assistir. A prévia fica escondida para poupar o PC.',
     canUnwatch: previewOn,
   });

@@ -144,9 +144,14 @@ function leaveVoice() {
 // Muting keeps sending (silence, almost free) so unmuting is instant.
 function setMuted(muted) {
   if (!voice.joined) return;
+  const wasSilent = voice.muted || voice.deafened;
   voice.muted = muted;
   if (!muted) voice.deafened = false; // talking again means hearing again
   applyTrackEnabled();
+  // The sound follows mute, not track.enabled: push-to-talk closes the track
+  // every time the key is released, and that must stay silent.
+  const silent = voice.muted || voice.deafened;
+  if (wasSilent !== silent) blip(silent ? 'down' : 'up');
   broadcastVoice();
   applyVoiceOutput();
   refresh();
@@ -156,6 +161,7 @@ function setDeafened(deafened) {
   if (!voice.joined) return;
   voice.deafened = deafened;
   applyTrackEnabled();
+  blip(deafened ? 'deaf' : 'up');
   broadcastVoice();
   applyVoiceOutput();
   refresh();
@@ -266,6 +272,26 @@ function chime(up) {
   osc.connect(gain);
   osc.start(t);
   osc.stop(t + 0.32);
+}
+
+// Short click so you know you muted, even with a fullscreen game in front
+// (Ctrl+Shift+M): falling for mute, rising for unmute, low double for "Fone".
+// Plays even when deafened: it's your own confirmation, not someone's voice.
+function blip(kind) {
+  if (!voice.ctx) return;
+  const t = voice.ctx.currentTime;
+  const notes = kind === 'down' ? [[620, 0], [440, 0.07]] : kind === 'deaf' ? [[392, 0], [294, 0.09]] : [[440, 0], [620, 0.07]];
+  const gain = voice.ctx.createGain();
+  gain.connect(voice.ctx.destination);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.06, t + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+  const osc = voice.ctx.createOscillator();
+  osc.type = 'triangle';
+  for (const [freq, at] of notes) osc.frequency.setValueAtTime(freq, t + at);
+  osc.connect(gain);
+  osc.start(t);
+  osc.stop(t + 0.22);
 }
 
 // ---------- configurações de voz ----------
