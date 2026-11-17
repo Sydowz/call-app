@@ -492,8 +492,22 @@ async function startShare() {
   // "motion" keeps the frame rate (games); "text" keeps sharpness (code).
   localTrack.contentHint = MODES[shareMode].hint;
   localTrack.onended = stopShare; // the browser's own "stop sharing" bar
-  localScreen.video.srcObject = new MediaStream([localTrack]);
+  setPreview(previewOn);
   peers.forEach((peer) => send(peer.id, { sharing: true })); // video only once they ask
+  refresh();
+}
+
+// Our own preview is one more video to decode and paint, so it starts hidden.
+let previewOn = load('preview') === 'on';
+localScreen.watchBtn.textContent = 'Mostrar prévia';
+localScreen.unwatchBtn.textContent = 'Esconder prévia';
+localScreen.watchBtn.onclick = () => setPreview(true);
+localScreen.unwatchBtn.onclick = () => setPreview(false);
+
+function setPreview(on) {
+  previewOn = on;
+  save('preview', on ? 'on' : '');
+  localScreen.video.srcObject = on && localTrack ? new MediaStream([localTrack]) : null;
   refresh();
 }
 
@@ -772,9 +786,11 @@ function refresh() {
   const viewers = list.filter((p) => p.watchesMe).length;
   showScreen(localScreen, {
     visible: !!localTrack,
-    watching: true,
+    watching: previewOn,
     label: '● Você está compartilhando',
     hint: viewers === 0 ? 'ninguém assistindo' : viewers === 1 ? '1 pessoa assistindo' : `${viewers} pessoas assistindo`,
+    waitingText: 'Sua tela está indo para quem clicar em Assistir. A prévia fica escondida para poupar o PC.',
+    canUnwatch: previewOn,
   });
   for (const peer of list) {
     const name = displayName(peer);
