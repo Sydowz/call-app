@@ -1,7 +1,6 @@
 'use strict';
 
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
-const MAX_PEERS = 6;
 const AVATAR_COLORS = ['#2E3A5C', '#5C3B3B', '#3B5C47', '#4A3B5C', '#5C4F3B', '#3B525C'];
 const MAX_PHOTO = 40_000; // photos travel inside signaling messages (64 KB limit on the server)
 const roomId = location.pathname.split('/').pop();
@@ -17,6 +16,7 @@ let myPhoto = validPhoto(load('photo'));
 let draftPhoto = ''; // photo being edited in the profile dialog
 let localTrack = null; // our screen's video track while sharing
 let roomFull = false;
+let maxPeers = 12; // the server sends the real limit in welcome/full
 let left = false;
 let timer = null;
 // id -> { id, nick, pc, transceiver, queue, screen,
@@ -195,7 +195,7 @@ function join() {
     setChatEnabled(false);
     clearInterval(timer);
     if (roomFull) {
-      showNotice('Sala cheia', `Esta sala já tem ${MAX_PEERS} pessoas. Tente de novo mais tarde ou crie outra.`);
+      showNotice('Sala cheia', `Esta sala já tem ${maxPeers} pessoas. Tente de novo mais tarde ou crie outra.`);
     } else {
       showNotice('Conexão perdida', 'Você foi desconectado do servidor.');
     }
@@ -207,6 +207,7 @@ function onMessage(ev) {
   switch (msg.type) {
     case 'welcome': {
       myId = msg.id;
+      maxPeers = msg.max ?? maxPeers;
       shareBtn.disabled = !canShare;
       const joinedAt = Date.now();
       timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
@@ -232,6 +233,7 @@ function onMessage(ev) {
     }
     case 'full':
       roomFull = true;
+      maxPeers = msg.max ?? maxPeers;
       break;
   }
 }
@@ -616,9 +618,10 @@ function personTile(person) {
   const avatar = el('div', 'avatar');
   avatar.setAttribute('aria-hidden', 'true');
   paintAvatar(avatar, person.name, person.id, person.photo);
-  const name = el('strong', 'ellipsis', person.name);
   const status = person.self ? ['você', 'online'] : person.status;
-  tile.append(avatar, name, el('span', `status ${status[1]}`, status[0]));
+  const text = el('div', 'tile-text');
+  text.append(el('strong', 'ellipsis', person.name), el('span', `status ${status[1]}`, status[0]));
+  tile.append(avatar, text);
   return tile;
 }
 
@@ -643,9 +646,10 @@ function refresh() {
   const others = list.map((p) => ({ id: p.id, name: displayName(p), photo: p.photo, status: peerStatus(p) }));
   const people = myId === null ? [] : [me, ...others];
 
-  $('online').textContent = people.length ? `● ${people.length}/${MAX_PEERS} online` : '';
+  $('online').textContent = people.length ? `● ${people.length}/${maxPeers} online` : '';
   $('people').replaceChildren(...people.map(personRow));
   $('tiles').replaceChildren(...people.map(personTile));
+  $('tiles').classList.toggle('compact', people.length > 4); // big avatars don't fit
 
   const viewers = list.filter((p) => p.watchesMe).length;
   showScreen(localScreen, {

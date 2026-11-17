@@ -6,7 +6,7 @@ Compartilhamento de tela entre amigos. Você abre o link, manda para a galera e 
 - O vídeo vai direto de navegador para navegador (P2P, mesh), com STUN público do Google.
 - Cada pessoa escolhe um nick e, se quiser, uma foto (reduzida para 128×128 no próprio navegador). Os dois ficam salvos só no navegador e vão para os outros pelo canal de sinalização; o servidor não registra nada.
 - Chat da sala pelo mesmo WebSocket da sinalização, para funcionar mesmo quando a conexão direta de vídeo falha. O servidor só repassa as mensagens: não grava nem registra nada, e quem entra depois não vê as anteriores.
-- Até 6 pessoas por sala. As salas ficam só na memória e somem quando a última pessoa sai.
+- Até 12 pessoas por sala (configurável). As salas ficam só na memória e somem quando a última pessoa sai.
 
 ## Rodar
 
@@ -16,7 +16,7 @@ Precisa do Rust ([rustup.rs](https://rustup.rs)).
 cargo run --release
 ```
 
-Abra http://localhost:3000. Você cai numa sala nova (`/room/<id>`). É só copiar o link e mandar. Para usar outra porta: `PORT=8080 cargo run --release`.
+Abra http://localhost:3000. Você cai numa sala nova (`/room/<id>`). É só copiar o link e mandar. Variáveis opcionais: `PORT` (padrão 3000) e `MAX_PEERS` (pessoas por sala, padrão 12), por exemplo `PORT=8080 MAX_PEERS=20 cargo run --release`.
 
 ## Testar
 
@@ -40,7 +40,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 ## Limitações
 
 - Sem TURN: em algumas redes (NAT simétrico, redes corporativas, alguns 4G) a conexão P2P falha. O nome do participante aparece com "falha na conexão P2P".
-- Mesh: quem compartilha envia uma cópia do vídeo para cada pessoa *que está assistindo*. Com 6 pessoas isso dá até 5 envios, o que exige um bom upload.
+- Mesh: quem compartilha envia uma cópia do vídeo para cada pessoa *que está assistindo*. Com a sala cheia (12) isso dá até 11 envios, o que exige um bom upload; salas bem maiores pedem um servidor de mídia (SFU, issue #25).
 - Se cair a conexão com o servidor, é preciso recarregar a página (não há reconexão automática).
 
 ## Decisões técnicas
@@ -53,3 +53,11 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 - **`tokio::select!` num socket só, em vez de dividi-lo**: dispensa o crate `futures-util`.
 - **Erros com `Result` e `?` (`Box<dyn Error>` no `main`) em vez de `anyhow`**: o servidor só tem dois pontos de falha, abrir a porta e ler `PORT`.
 - **`println!` em vez de `tracing`**: os logs mostram só o número do participante e os 6 primeiros caracteres da sala. Não registram IP nem o link completo.
+
+## Contribuir
+
+Contribuições são bem-vindas, sempre com revisão do mantenedor. Veja o [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licença
+
+[MIT](LICENSE).
