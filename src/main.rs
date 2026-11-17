@@ -44,6 +44,7 @@ const ROOM_JS: &str = include_str!("../static/room.js");
 const LOBBY_JS: &str = include_str!("../static/lobby.js");
 const COMMON_JS: &str = include_str!("../static/common.js");
 const COMMON_CSS: &str = include_str!("../static/common.css");
+const THEME_JS: &str = include_str!("../static/theme.js");
 const FAVICON_SVG: &str = include_str!("../static/favicon.svg");
 const TOUCH_ICON_PNG: &[u8] = include_bytes!("../static/apple-touch-icon.png");
 
@@ -88,6 +89,7 @@ fn app(rooms: Rooms, ice: Arc<Ice>) -> Router {
         .route("/room.js", get(|| async { javascript(ROOM_JS) }))
         .route("/lobby.js", get(|| async { javascript(LOBBY_JS) }))
         .route("/common.js", get(|| async { javascript(COMMON_JS) }))
+        .route("/theme.js", get(|| async { javascript(THEME_JS) }))
         .route(
             "/common.css",
             get(|| async {
@@ -255,6 +257,7 @@ mod tests {
             .contains("content-type: text/javascript"));
         assert!(get("/common.js").await.contains("text/javascript"));
         assert!(get("/lobby.js").await.contains("text/javascript"));
+        assert!(get("/theme.js").await.contains("text/javascript"));
         assert!(get("/common.css").await.contains("content-type: text/css"));
         assert!(get("/favicon.svg")
             .await
