@@ -273,7 +273,10 @@ function createPeer(id, initiator) {
   pc.onicecandidate = (e) => {
     if (e.candidate) send(id, { candidate: e.candidate });
   };
-  pc.onconnectionstatechange = refresh;
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') tuneSender(peer); // encodings exist now
+    refresh();
+  };
 
   if (initiator) {
     // Whoever joins later sends the offer, so each pair negotiates exactly once.
@@ -396,8 +399,68 @@ function sendScreenTo(peer) {
   if (!peer.transceiver) return; // attached later, once that peer's offer arrives
   const track = localTrack && peer.watchesMe ? localTrack : null;
   if (peer.transceiver.sender.track === track) return;
-  peer.transceiver.sender.replaceTrack(track).catch((err) => console.warn(err));
+  peer.transceiver.sender.replaceTrack(track)
+    .then(() => track && tuneSender(peer))
+    .catch((err) => console.warn(err));
 }
+
+// ---------- modo Jogo / Texto ----------
+
+// Jogo: smooth and light. Texto: sharp text for code and documents, at a low
+// frame rate. The caps are applied in the encoder (works for any capture
+// source) and, best effort, in the capture itself.
+const MODES = {
+  jogo: { hint: 'motion', fps: 30, maxHeight: 720, bitrate: 2_500_000, degradation: 'maintain-framerate' },
+  texto: { hint: 'text', fps: 15, maxHeight: 1080, bitrate: 2_500_000, degradation: 'maintain-resolution' },
+};
+let shareMode = load('shareMode') === 'texto' ? 'texto' : 'jogo';
+
+function captureConstraints() {
+  const mode = MODES[shareMode];
+  return { frameRate: { ideal: mode.fps, max: mode.fps }, height: { max: mode.maxHeight } };
+}
+
+function encoderSettings(sender) {
+  const mode = MODES[shareMode];
+  const height = sender.track.getSettings().height || mode.maxHeight;
+  return {
+    maxBitrate: mode.bitrate,
+    maxFramerate: mode.fps,
+    scaleResolutionDownBy: Math.max(1, height / mode.maxHeight),
+  };
+}
+
+async function tuneSender(peer) {
+  const sender = peer.transceiver?.sender;
+  if (!sender?.track) return;
+  const params = sender.getParameters();
+  if (!params.encodings?.length) return; // not negotiated yet: retried once connected
+  Object.assign(params.encodings[0], encoderSettings(sender));
+  params.degradationPreference = MODES[shareMode].degradation;
+  try {
+    await sender.setParameters(params);
+  } catch {
+    // Some browsers reject degradationPreference: retry with fresh params without it.
+    const retry = sender.getParameters();
+    if (!retry.encodings?.length) return;
+    Object.assign(retry.encodings[0], encoderSettings(sender));
+    await sender.setParameters(retry).catch((err) => console.warn('encoder', err));
+  }
+}
+
+function setShareMode(mode) {
+  shareMode = mode;
+  save('shareMode', mode);
+  if (localTrack) {
+    localTrack.contentHint = MODES[mode].hint;
+    localTrack.applyConstraints(captureConstraints())
+      .catch(() => { /* capture caps are best effort; the encoder caps still apply */ })
+      .finally(() => peers.forEach(tuneSender));
+  }
+  refresh();
+}
+$('mode-jogo').onclick = () => setShareMode('jogo');
+$('mode-texto').onclick = () => setShareMode('texto');
 
 function setWatch(peer, watch) {
   peer.iWatch = watch;
@@ -421,13 +484,13 @@ shareBtn.onclick = () => (localTrack ? stopShare() : startShare());
 async function startShare() {
   let stream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: captureConstraints(), audio: false });
   } catch {
     return; // usuário cancelou a escolha
   }
   localTrack = stream.getVideoTracks()[0];
-  // "text" makes the encoder keep resolution (sharp text) and drop frames instead.
-  localTrack.contentHint = 'text';
+  // "motion" keeps the frame rate (games); "text" keeps sharpness (code).
+  localTrack.contentHint = MODES[shareMode].hint;
   localTrack.onended = stopShare; // the browser's own "stop sharing" bar
   localScreen.video.srcObject = new MediaStream([localTrack]);
   peers.forEach((peer) => send(peer.id, { sharing: true })); // video only once they ask
@@ -736,6 +799,8 @@ function refresh() {
 
   $('share-long').textContent = localTrack ? 'Parar compartilhamento' : 'Compartilhar tela';
   $('share-short').textContent = localTrack ? 'Parar' : 'Tela';
+  $('mode-jogo').setAttribute('aria-pressed', String(shareMode === 'jogo'));
+  $('mode-texto').setAttribute('aria-pressed', String(shareMode === 'texto'));
 }
 
 // ---------- início ----------
