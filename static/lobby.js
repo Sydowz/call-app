@@ -26,6 +26,9 @@ $('edit').onclick = () => openProfileDialog({
     nick = newNick;
     photo = newPhoto;
     renderProfile();
+    ensureHomeRoom(nick); // the fixed room is named after the first nick
+    renderRooms();
+    updateCounts();
   },
 });
 
@@ -104,28 +107,25 @@ function roomItem(room) {
 
 function renderRooms() {
   const list = orderedRooms();
-  $('rooms-empty').hidden = list.length > 1;
+  $('rooms-empty').hidden = list.some((r) => !r.home);
   $('rooms').replaceChildren(...list.map(roomItem));
 }
 
 async function updateCounts() {
   const ids = orderedRooms().map((r) => r.id);
   if (!ids.length || document.hidden) return;
-  try {
-    const res = await fetch(`/api/rooms?ids=${ids.join(',')}`, { cache: 'no-store' });
-    if (!res.ok) return;
-    counts = await res.json();
-    $('rooms-updated').textContent = 'atualiza sozinho';
-    renderRooms();
-  } catch {
-    // Offline: keep the last numbers.
-  }
+  const fresh = await fetchRoomCounts(ids);
+  if (!fresh) return; // offline: keep the last numbers
+  counts = fresh;
+  $('rooms-updated').textContent = 'atualiza sozinho';
+  renderRooms();
 }
 
 // ---------- início ----------
 
 $('example-url').textContent = `${location.host}/room/churrasco-k3f9x2`;
 renderProfile();
+if (nick) ensureHomeRoom(nick);
 renderRooms();
 updateCounts();
 setInterval(updateCounts, COUNTS_EVERY_MS);

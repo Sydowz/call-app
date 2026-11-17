@@ -777,11 +777,23 @@ $('home').onclick = (e) => {
 // without going back. The counts come from the server's /api/rooms.
 let hudCounts = {};
 
+// Leaving while sharing cuts everyone watching: ask first.
+function okToLeave() {
+  return !localTrack || window.confirm('Você está compartilhando a tela. Sair desta sala mesmo assim?');
+}
+
 function hudItem(room) {
   const current = room.id === roomId;
-  const link = el('a', 'hud-room');
-  link.href = `/room/${room.id}`;
-  if (current) link.setAttribute('aria-current', 'page');
+  // The current room is not a link: clicking it would reload and reconnect.
+  const link = el(current ? 'div' : 'a', 'hud-room');
+  if (current) {
+    link.setAttribute('aria-current', 'page');
+  } else {
+    link.href = `/room/${room.id}`;
+    link.onclick = (e) => {
+      if (!okToLeave()) e.preventDefault();
+    };
+  }
   const icon = el('span', 'hud-icon', room.home ? '★' : '#');
   icon.style.background = colorFor(room.id);
   icon.setAttribute('aria-hidden', 'true');
@@ -799,18 +811,23 @@ function renderHud() {
 }
 
 async function updateHudCounts() {
-  if (document.hidden) return;
-  const ids = orderedRooms().map((r) => r.id);
-  try {
-    const res = await fetch(`/api/rooms?ids=${ids.join(',')}`, { cache: 'no-store' });
-    if (!res.ok) return;
-    hudCounts = await res.json();
-    renderHud();
-  } catch { /* offline: keep the last numbers */ }
+  if (document.hidden || !$('hud').open) return; // nothing to show while folded
+  const fresh = await fetchRoomCounts(orderedRooms().map((r) => r.id));
+  if (!fresh) return; // offline: keep the last numbers
+  hudCounts = fresh;
+  renderHud();
 }
+
+// Folded by default so the chat keeps its space; remembered per browser.
+$('hud').open = load('hud-open') === '1';
+$('hud').ontoggle = () => {
+  save('hud-open', $('hud').open ? '1' : '');
+  updateHudCounts();
+};
 
 $('hud-new').onsubmit = (e) => {
   e.preventDefault();
+  if (!okToLeave()) return;
   const id = newRoomId($('hud-new-name').value);
   location.assign(`/room/${id}`);
 };
@@ -826,7 +843,9 @@ window.addEventListener('storage', renderHud); // changed from another tab
 // message goes to the clipboard.
 async function invite() {
   const url = location.href;
-  const text = `Bora? Entra na sala ${displayRoomName(roomId)} do CPX Call:`;
+  const text = isHomeRoom(roomId)
+    ? 'Bora? Entra na minha sala do CPX Call:'
+    : `Bora? Entra na sala ${roomName(roomId)} do CPX Call:`;
   if (navigator.share && mobile.matches) {
     try {
       await navigator.share({ title: 'CPX Call', text, url });
@@ -1040,7 +1059,7 @@ function refresh() {
 // ---------- início ----------
 
 $('room-tag').textContent = `# ${displayRoomName(roomId)}`;
-$('room-title').textContent = roomId === homeRoomId() ? 'Sala fixa' : `Sala ${roomName(roomId)}`;
+$('room-title').textContent = isHomeRoom(roomId) ? 'Sala fixa' : `Sala ${roomName(roomId)}`;
 if (!canShare) {
   shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';
