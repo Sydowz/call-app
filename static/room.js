@@ -844,7 +844,7 @@ window.addEventListener('storage', renderHud); // changed from another tab
 async function invite() {
   const url = location.href;
   const text = isHomeRoom(roomId)
-    ? 'Bora? Entra na minha sala do CPX Call:'
+    ? 'Bora? Entra no meu Block do CPX Call:'
     : `Bora? Entra na sala ${roomName(roomId)} do CPX Call:`;
   if (navigator.share && mobile.matches) {
     try {
@@ -1059,7 +1059,7 @@ function refresh() {
 // ---------- início ----------
 
 $('room-tag').textContent = `# ${displayRoomName(roomId)}`;
-$('room-title').textContent = isHomeRoom(roomId) ? 'Sala fixa' : `Sala ${roomName(roomId)}`;
+$('room-title').textContent = isHomeRoom(roomId) ? 'Block' : `Sala ${roomName(roomId)}`;
 if (!canShare) {
   shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';
