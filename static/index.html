@@ -2,15 +2,96 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Friends Call</title>
+  <link rel="stylesheet" href="/common.css">
+  <style>
+    .lobby { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+    .top { padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
+    .top h1 { margin: 0; font-size: 18px; font-weight: 700; }
+    .me { margin-left: auto; display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .me .avatar { width: 36px; height: 36px; font-size: 13px; }
+    .me strong { font-weight: 600; max-width: 22ch; }
+
+    .grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; align-items: start; }
+    .column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .panel { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+    .panel h2 { margin: 0; font-size: 16px; font-weight: 600; }
+    .panel p { margin: 0; font-size: 13px; }
+    .inline { display: flex; gap: 8px; }
+    .input { flex: 1; min-width: 0; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--raised); }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+    #rooms { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .room-item { display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 12px; background: var(--frame); border: 1px solid var(--border); }
+    .room-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 6px; border-radius: 8px; color: inherit; text-decoration: none; }
+    .room-link:hover strong { text-decoration: underline; }
+    .room-icon { flex: none; width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--text); }
+    .room-text { display: flex; flex-direction: column; min-width: 0; }
+    .room-text strong { font-weight: 600; }
+    .room-meta { font-size: 12px; color: var(--muted); }
+    .ghost { background: transparent; color: var(--muted); font-weight: 500; padding: 0 10px; }
+    .ghost:hover { color: var(--text); background: var(--raised); }
+    .ghost[aria-pressed="true"] { color: var(--warn); }
+    .empty { padding: 20px; text-align: center; color: var(--muted); border: 1px dashed var(--border-strong); border-radius: 12px; }
+
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: minmax(0, 1fr); }
+      .me strong { display: none; }
+      .top { padding: 12px; gap: 10px; }
+      .top h1 { font-size: 16px; white-space: nowrap; }
+      .me .btn { padding: 0 12px; }
+      .room-item { flex-wrap: wrap; }
+      .room-link { flex-basis: 100%; }
+    }
+  </style>
 </head>
-<body style="font-family: system-ui, sans-serif; background: #0B0C10; color: #E8EAF2">
-  <p>Criando sala…</p>
-  <noscript>Este app precisa de JavaScript.</noscript>
-  <script>
-    const bytes = crypto.getRandomValues(new Uint8Array(8));
-    const id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-    location.replace('/room/' + id);
-  </script>
+<body>
+  <main class="lobby">
+    <header class="top card">
+      <div class="logo" aria-hidden="true">FC</div>
+      <h1>Friends Call</h1>
+      <div class="me">
+        <div class="avatar" id="me-avatar" aria-hidden="true"></div>
+        <strong class="ellipsis" id="me-nick"></strong>
+        <button class="btn small" id="edit">Editar</button>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="column">
+        <section class="panel card" aria-labelledby="create-title">
+          <h2 id="create-title">Criar sala</h2>
+          <form class="inline" id="create-form">
+            <label class="sr-only" for="room-name">Nome da sala (opcional)</label>
+            <input class="input" id="room-name" maxlength="40" placeholder="Nome da sala (opcional)" autocomplete="off">
+            <button class="btn small primary">Criar</button>
+          </form>
+          <p class="muted">Com nome, o link fica fácil de reconhecer, como <span id="example-url">/room/churrasco-k3f9x2</span>. O final aleatório impede que estranhos adivinhem a sala.</p>
+        </section>
+
+        <section class="panel card" aria-labelledby="join-title">
+          <h2 id="join-title">Entrar com um convite</h2>
+          <form class="inline" id="join-form">
+            <label class="sr-only" for="join-link">Link ou código da sala</label>
+            <input class="input" id="join-link" placeholder="Cole o link ou o código" autocomplete="off">
+            <button class="btn small">Entrar</button>
+          </form>
+        </section>
+      </div>
+
+      <section class="panel card" aria-labelledby="rooms-title">
+        <div class="row">
+          <h2 id="rooms-title">Suas salas</h2>
+          <span class="end muted" id="rooms-updated"></span>
+        </div>
+        <p class="empty" id="rooms-empty">Você ainda não entrou em nenhuma sala. Crie uma ou cole o link de um convite: as salas por onde você passar aparecem aqui, com quem está nelas agora.</p>
+        <ul id="rooms" aria-label="Suas salas"></ul>
+      </section>
+    </div>
+  </main>
+
+  <script src="/common.js"></script>
+  <script src="/lobby.js"></script>
 </body>
 </html>
