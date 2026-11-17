@@ -186,22 +186,46 @@ function enterRoom(takeover = false) {
 
 // ---------- sinalização (WebSocket) ----------
 
+// Reconnection: when the WebSocket drops, the server has already removed us
+// and the others closed their connections to us, so we drop ours too and come
+// back as a new participant, retrying with a growing delay.
+const RETRY_MAX_MS = 30_000;
+let retryDelay = 1000;
+let reconnecting = false;
+let reconnectTimer = null;
+
 async function join() {
   hwH264 = await hwH264Ready; // must be in the first profile we send
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
+  const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
+  ws = socket;
   ws.onmessage = onMessage;
   ws.onclose = () => {
-    if (left) return;
-    shareBtn.disabled = true;
+    if (left || socket !== ws) return;
     setChatEnabled(false);
-    clearInterval(timer);
     if (roomFull) {
+      shareBtn.disabled = true;
+      clearInterval(timer);
       showNotice('Sala cheia', `Esta sala já tem ${maxPeers} pessoas. Tente de novo mais tarde ou crie outra.`);
-    } else {
-      showNotice('Conexão perdida', 'Você foi desconectado do servidor.');
+      return;
     }
+    if (!reconnecting) addSystem('Conexão perdida. Reconectando…');
+    reconnecting = true;
+    [...peers.keys()].forEach(removePeer);
+    myId = null;
+    refresh();
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(join, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
   };
 }
+
+// Back online: don't wait for the current back-off delay.
+window.addEventListener('online', () => {
+  if (!reconnecting || left) return;
+  clearTimeout(reconnectTimer);
+  retryDelay = 1000;
+  join();
+});
 
 function onMessage(ev) {
   const msg = JSON.parse(ev.data);
@@ -210,11 +234,15 @@ function onMessage(ev) {
       myId = msg.id;
       maxPeers = msg.max ?? maxPeers;
       shareBtn.disabled = !canShare;
-      const joinedAt = Date.now();
-      timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
+      retryDelay = 1000;
+      if (!timer) { // keeps counting across reconnections
+        const joinedAt = Date.now();
+        timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
+      }
       for (const id of msg.peers) createPeer(id, true);
       setChatEnabled(true);
-      addSystem('Você entrou na sala. As mensagens do chat não ficam salvas.');
+      addSystem(reconnecting ? 'Reconectado.' : 'Você entrou na sala. As mensagens do chat não ficam salvas.');
+      reconnecting = false;
       refresh();
       break;
     }
@@ -527,6 +555,7 @@ function stopShare() {
 
 function leaveRoom(title, text, action) {
   left = true;
+  clearTimeout(reconnectTimer);
   stopShare();
   ws?.close();
   clearInterval(timer);
@@ -807,6 +836,7 @@ function refresh() {
   $('empty').hidden = shown > 0;
   $('screens').style.setProperty('--cols', shown > 2 ? 2 : 1);
   $('live').hidden = shown === 0;
+  $('reconnecting').hidden = !reconnecting;
 
   paintAvatar($('me-avatar'), myNick, myId, myPhoto);
   $('me-nick').textContent = myNick;
