@@ -29,6 +29,7 @@ let myId = null;
 let myNick = load('nick');
 let myPhoto = validPhoto(load('photo'));
 let localTrack = null; // our screen's video track while sharing
+let localAudio = null; // its sound (tab or system audio), when the browser gave one
 let roomFull = false;
 let maxPeers = 12; // the server sends the real limit in welcome/full
 let left = false;
@@ -167,6 +168,7 @@ function onMessage(ev) {
       }
       for (const id of msg.peers) createPeer(id, true);
       rememberRoom(roomId); // shows up in the lobby's "Suas salas"
+      renderHud();
       setChatEnabled(true);
       addSystem(reconnecting ? 'Reconectado.' : 'Você entrou na sala. As mensagens do chat não ficam salvas.');
       reconnecting = false;
@@ -213,8 +215,8 @@ function enqueue(peer, step) {
 function createPeer(id, initiator) {
   const pc = new RTCPeerConnection({ iceServers });
   const peer = {
-    id, nick: '', photo: '', pc, transceiver: null,
-    sharing: false, iWatch: false, watchesMe: false,
+    id, nick: '', photo: '', pc, transceiver: null, audioTransceiver: null,
+    sharing: false, hasAudio: false, iWatch: false, watchesMe: false,
     announced: initiator, // people already here when we joined don't get an "entrou" line
     hwH264: false,
     queue: Promise.resolve(),
@@ -224,6 +226,9 @@ function createPeer(id, initiator) {
   peer.screen.watchBtn.onclick = () => setWatch(peer, true);
   peer.screen.unwatchBtn.onclick = () => setWatch(peer, false);
   peer.screen.retryBtn.onclick = () => retryConnection(peer);
+  peer.screen.soundBtn.onclick = () => setSoundMuted(!soundMuted);
+  peer.screen.volume.oninput = () => setVolume(Number(peer.screen.volume.value));
+  peer.screen.volume.setAttribute('aria-label', 'Volume');
   peers.set(id, peer);
 
   pc.onicecandidate = (e) => {
@@ -240,8 +245,10 @@ function createPeer(id, initiator) {
     // One "sendrecv" video transceiver carries a screen in each direction;
     // starting or stopping a share later is just replaceTrack(), with no
     // renegotiation (and therefore no colliding offers between two peers).
+    // ...and one "sendrecv" audio transceiver for the shared sound, same idea.
     const transceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
-    attachTransceiver(peer, transceiver);
+    const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+    attachTransceiver(peer, transceiver, audioTransceiver);
     enqueue(peer, async () => {
       // Their profile says what they encode well; give up waiting after 3s.
       await Promise.race([peer.profileKnown, new Promise((r) => setTimeout(r, 3000))]);
@@ -252,7 +259,7 @@ function createPeer(id, initiator) {
   }
 
   send(id, profileMsg());
-  if (localTrack) send(id, { sharing: true });
+  if (localTrack) send(id, { sharing: true, audio: !!localAudio });
   refresh();
   return peer;
 }
@@ -297,33 +304,40 @@ function preferCodecs(transceiver, peer) {
   }
 }
 
-function attachTransceiver(peer, transceiver) {
+function attachTransceiver(peer, transceiver, audioTransceiver) {
   peer.transceiver = transceiver;
-  // The receiver track exists from the start; it simply has no frames until
-  // the other side calls replaceTrack() with its screen.
-  peer.screen.video.srcObject = new MediaStream([transceiver.receiver.track]);
+  peer.audioTransceiver = audioTransceiver ?? null;
+  // The receiver tracks exist from the start; they simply carry nothing until
+  // the other side calls replaceTrack() with its screen (and its sound).
+  const tracks = [transceiver.receiver.track];
+  if (audioTransceiver) tracks.push(audioTransceiver.receiver.track);
+  peer.screen.video.srcObject = new MediaStream(tracks);
   sendScreenTo(peer); // in case they asked to watch before this was set up
 }
 
 async function handleSignal(peer, data) {
   const { pc } = peer;
   if (data.description) {
-    await pc.setRemoteDescription(data.description);
+    await pc.setRemoteDescription(withStereoOpus(data.description));
     if (data.description.type === 'offer') {
-      // A transceiver created from a remote offer defaults to "recvonly";
-      // switch it to "sendrecv" so we can share our screen back later.
-      const transceiver = pc.getTransceivers()[0];
+      // Transceivers created from a remote offer default to "recvonly";
+      // switch them to "sendrecv" so we can share our screen back later.
+      const byKind = (kind) => pc.getTransceivers().find((t) => t.receiver.track.kind === kind);
+      const transceiver = byKind('video');
+      const audioTransceiver = byKind('audio');
       transceiver.direction = 'sendrecv';
+      if (audioTransceiver) audioTransceiver.direction = 'sendrecv';
       preferCodecs(transceiver, peer); // their profile arrived before the offer
       await pc.setLocalDescription(); // creates the answer implicitly
       send(peer.id, { description: pc.localDescription });
-      attachTransceiver(peer, transceiver);
+      attachTransceiver(peer, transceiver, audioTransceiver);
     }
   } else if (data.candidate) {
     await pc.addIceCandidate(data.candidate);
   } else if ('sharing' in data) {
     const started = !!data.sharing && !peer.sharing;
     peer.sharing = !!data.sharing;
+    peer.hasAudio = peer.sharing && !!data.audio;
     if (!peer.sharing) peer.iWatch = false; // a new share starts unwatched
     if (started) addSystem(`${displayName(peer)} começou a compartilhar a tela`);
     refresh();
@@ -338,6 +352,21 @@ async function handleSignal(peer, data) {
     sendScreenTo(peer);
     refresh();
   }
+}
+
+// Chrome sends mono Opus unless the other side's description says it plays
+// stereo. Game and music audio deserve stereo and a higher bitrate, so we mark
+// that on every description we receive (it only affects what *we* send).
+function withStereoOpus(description) {
+  let sdp = description.sdp ?? '';
+  const opus = [...sdp.matchAll(/a=rtpmap:(\d+) opus\/48000\/2/gi)].map((m) => m[1]);
+  for (const pt of opus) {
+    sdp = sdp.replace(new RegExp(`a=fmtp:${pt} ([^\r\n]*)`), (_, params) => {
+      const kept = params.split(';').filter((p) => p && !/^(stereo|sprop-stereo|maxaveragebitrate)=/.test(p));
+      return `a=fmtp:${pt} ${[...kept, 'stereo=1', 'sprop-stereo=1', 'maxaveragebitrate=128000'].join(';')}`;
+    });
+  }
+  return { type: description.type, sdp };
 }
 
 function handleProfile(peer, data) {
@@ -356,11 +385,18 @@ function handleProfile(peer, data) {
 // track, so we don't encode for them and they don't decode anything.
 function sendScreenTo(peer) {
   if (!peer.transceiver) return; // attached later, once that peer's offer arrives
-  const track = localTrack && peer.watchesMe ? localTrack : null;
-  if (peer.transceiver.sender.track === track) return;
-  peer.transceiver.sender.replaceTrack(track)
-    .then(() => track && tuneSender(peer))
-    .catch((err) => console.warn(err));
+  const watching = !!localTrack && peer.watchesMe;
+  const video = watching ? localTrack : null;
+  if (peer.transceiver.sender.track !== video) {
+    peer.transceiver.sender.replaceTrack(video)
+      .then(() => video && tuneSender(peer))
+      .catch((err) => console.warn(err));
+  }
+  const audio = watching ? localAudio : null;
+  const audioSender = peer.audioTransceiver?.sender;
+  if (audioSender && audioSender.track !== audio) {
+    audioSender.replaceTrack(audio).catch((err) => console.warn(err));
+  }
 }
 
 // ---------- modo Jogo / Texto ----------
@@ -466,8 +502,32 @@ document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) screen.orientation?.unlock?.();
 });
 
+// One volume and mute for every stream you watch, saved in this browser.
+let soundVolume = Math.min(1, Math.max(0, Number(load('volume') || 1)));
+let soundMuted = load('muted') === '1';
+
+function setVolume(value) {
+  soundVolume = value;
+  save('volume', String(value));
+  if (value > 0 && soundMuted) setSoundMuted(false);
+  else refresh();
+}
+
+function setSoundMuted(muted) {
+  soundMuted = muted;
+  save('muted', muted ? '1' : '');
+  refresh();
+}
+
 function setWatch(peer, watch) {
   peer.iWatch = watch;
+  if (watch) {
+    // The click on "Assistir" lets the browser play sound: unmute right here.
+    const video = peer.screen.video;
+    video.volume = soundVolume;
+    video.muted = soundMuted;
+    video.play().catch(() => {});
+  }
   send(peer.id, { watch });
   refresh();
 }
@@ -486,19 +546,55 @@ function removePeer(id) {
 
 shareBtn.onclick = () => (localTrack ? stopShare() : startShare());
 
+// What is shared also brings its sound when the browser allows it: a tab, or
+// the whole screen's system audio on Windows. No voice processing (it ruins
+// music and game audio), and restrictOwnAudio keeps what this tab plays (the
+// friends' streams) out of it, so nobody hears an echo of themselves.
+const SHARE_AUDIO = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  restrictOwnAudio: true,
+  suppressLocalAudioPlayback: false,
+};
+
+async function captureScreen() {
+  try {
+    return await navigator.mediaDevices.getDisplayMedia({ video: captureConstraints(), audio: SHARE_AUDIO, systemAudio: 'include' });
+  } catch (err) {
+    if (err.name === 'NotAllowedError' || err.name === 'AbortError') throw err; // picker cancelled
+    // A browser that rejects audio capture outright: share without sound.
+    return navigator.mediaDevices.getDisplayMedia({ video: captureConstraints(), audio: false });
+  }
+}
+
 async function startShare() {
   let stream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: captureConstraints(), audio: false });
+    stream = await captureScreen();
   } catch {
     return; // usuário cancelou a escolha
   }
   localTrack = stream.getVideoTracks()[0];
+  localAudio = stream.getAudioTracks()[0] ?? null;
+  if (localAudio) {
+    localAudio.contentHint = 'music'; // Opus in music mode, not voice
+    localAudio.onended = () => { // sound stopped but the screen goes on
+      localAudio = null;
+      peers.forEach((peer) => {
+        sendScreenTo(peer);
+        send(peer.id, { sharing: true, audio: false });
+      });
+      refresh();
+    };
+  } else {
+    toast('Compartilhando sem som. Para incluir o som, escolha "Tela inteira" e marque "Compartilhar áudio do sistema", ou uma aba do Chrome com "Compartilhar áudio da guia".', 9000);
+  }
   // "motion" keeps the frame rate (games); "text" keeps sharpness (code).
   localTrack.contentHint = MODES[shareMode].hint;
   localTrack.onended = stopShare; // the browser's own "stop sharing" bar
   setPreview(previewOn);
-  peers.forEach((peer) => send(peer.id, { sharing: true })); // video only once they ask
+  peers.forEach((peer) => send(peer.id, { sharing: true, audio: !!localAudio })); // media only once they ask
   refresh();
 }
 
@@ -506,6 +602,8 @@ async function startShare() {
 let previewOn = load('preview') === 'on';
 localScreen.watchBtn.textContent = 'Mostrar prévia';
 localScreen.pipBtn.remove(); // no point floating your own screen
+localScreen.soundBtn.remove(); // your own sound is never played back to you
+localScreen.volume.remove();
 localScreen.unwatchBtn.textContent = 'Esconder prévia';
 localScreen.watchBtn.onclick = () => setPreview(true);
 localScreen.unwatchBtn.onclick = () => setPreview(false);
@@ -522,6 +620,11 @@ function stopShare() {
   localTrack.onended = null;
   localTrack.stop();
   localTrack = null;
+  if (localAudio) {
+    localAudio.onended = null;
+    localAudio.stop();
+    localAudio = null;
+  }
   localScreen.video.srcObject = null;
   peers.forEach((peer) => {
     peer.watchesMe = false;
@@ -574,7 +677,7 @@ function updateUnread() {
   if (chatVisible()) unread = 0;
   $('chat-badge').hidden = unread === 0;
   $('chat-badge').textContent = String(unread);
-  document.title = unread ? `(${unread}) Friends Call` : 'Friends Call';
+  document.title = unread ? `(${unread}) CPX Call` : 'CPX Call';
 }
 
 // Builds text with http(s) links as anchors, never as HTML.
@@ -668,16 +771,65 @@ $('home').onclick = (e) => {
   goToLobby();
 };
 
+// ---------- suas salas (barra lateral) ----------
+
+// Same list as the lobby (fixed room first), so you can hop between rooms
+// without going back. The counts come from the server's /api/rooms.
+let hudCounts = {};
+
+function hudItem(room) {
+  const current = room.id === roomId;
+  const link = el('a', 'hud-room');
+  link.href = `/room/${room.id}`;
+  if (current) link.setAttribute('aria-current', 'page');
+  const icon = el('span', 'hud-icon', room.home ? '★' : '#');
+  icon.style.background = colorFor(room.id);
+  icon.setAttribute('aria-hidden', 'true');
+  const count = hudCounts[room.id];
+  const text = el('span', 'hud-count', count > 0 ? `● ${count}` : '');
+  if (count > 0) text.classList.add('online');
+  link.append(icon, el('span', 'hud-name ellipsis', displayRoomName(room.id)), text);
+  const li = el('li');
+  li.append(link);
+  return li;
+}
+
+function renderHud() {
+  $('hud-rooms').replaceChildren(...orderedRooms().map(hudItem));
+}
+
+async function updateHudCounts() {
+  if (document.hidden) return;
+  const ids = orderedRooms().map((r) => r.id);
+  try {
+    const res = await fetch(`/api/rooms?ids=${ids.join(',')}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    hudCounts = await res.json();
+    renderHud();
+  } catch { /* offline: keep the last numbers */ }
+}
+
+$('hud-new').onsubmit = (e) => {
+  e.preventDefault();
+  const id = newRoomId($('hud-new-name').value);
+  location.assign(`/room/${id}`);
+};
+
+renderHud();
+updateHudCounts();
+setInterval(updateHudCounts, 15_000);
+window.addEventListener('storage', renderHud); // changed from another tab
+
 // ---------- convidar ----------
 
 // Phones open the system share sheet (WhatsApp etc.); elsewhere a ready-made
 // message goes to the clipboard.
 async function invite() {
   const url = location.href;
-  const text = `Bora? Entra na sala ${roomName(roomId)} do Friends Call:`;
+  const text = `Bora? Entra na sala ${displayRoomName(roomId)} do CPX Call:`;
   if (navigator.share && mobile.matches) {
     try {
-      await navigator.share({ title: 'Friends Call', text, url });
+      await navigator.share({ title: 'CPX Call', text, url });
       return;
     } catch (err) {
       if (err.name === 'AbortError') return; // closed the share sheet
@@ -740,6 +892,12 @@ function buildScreen() {
   frame.append(video, waiting, failed);
   const pill = el('span', 'pill');
   const hint = el('span', 'hint muted');
+  const soundBtn = el('button', 'btn small sound-btn');
+  const volume = el('input', 'volume');
+  volume.type = 'range';
+  volume.min = '0';
+  volume.max = '1';
+  volume.step = '0.05';
   const fullBtn = el('button', 'btn small', 'Tela cheia');
   fullBtn.onclick = () => enterFullscreen(video);
   // Picture-in-Picture: a small always-on-top window, to watch while playing.
@@ -750,10 +908,12 @@ function buildScreen() {
   const unwatchBtn = el('button', 'btn small');
   unwatchBtn.append(el('span', 'long', 'Parar de assistir'), el('span', 'short', 'Parar'));
   const foot = el('div', 'screen-foot');
-  foot.append(pill, hint, pipBtn, fullBtn, unwatchBtn);
+  const actions = el('div', 'screen-actions'); // wraps below the label when space runs out
+  actions.append(soundBtn, volume, pipBtn, fullBtn, unwatchBtn);
+  foot.append(pill, hint, actions);
   card.append(frame, foot);
   $('screens').append(card);
-  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, pipBtn, fullBtn, unwatchBtn };
+  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, soundBtn, volume, pipBtn, fullBtn, unwatchBtn };
 }
 
 function peerStatus(peer) {
@@ -792,7 +952,14 @@ function personTile(person) {
 
 // `watching` false shows the "Assistir" placeholder instead of the video.
 // `failedText` replaces both the video and the "Assistir" placeholder.
-function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false, failedText = '' }) {
+function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false, failedText = '', sound = false }) {
+  if (screen.soundBtn.isConnected) {
+    screen.soundBtn.hidden = !sound;
+    screen.volume.hidden = !sound;
+    screen.soundBtn.textContent = soundMuted ? 'Ouvir' : 'Silenciar';
+    screen.soundBtn.setAttribute('aria-pressed', String(soundMuted));
+    screen.volume.value = String(soundVolume);
+  }
   screen.fullBtn.hidden = !canUnwatch; // only for a screen you are watching
   screen.pipBtn.hidden = !canUnwatch || !document.pictureInPictureEnabled;
   // Close the floating window when that screen stops being watched.
@@ -832,7 +999,7 @@ function refresh() {
     visible: !!localTrack,
     watching: previewOn,
     label: '● Você está compartilhando',
-    hint: viewers === 0 ? 'ninguém assistindo' : viewers === 1 ? '1 pessoa assistindo' : `${viewers} pessoas assistindo`,
+    hint: `${viewers === 0 ? 'ninguém assistindo' : viewers === 1 ? '1 pessoa assistindo' : `${viewers} pessoas assistindo`} · ${localAudio ? 'com som' : 'sem som'}`,
     waitingText: 'Sua tela está indo para quem clicar em Assistir. A prévia fica escondida para poupar o PC.',
     canUnwatch: previewOn,
   });
@@ -843,12 +1010,15 @@ function refresh() {
       visible: peer.sharing,
       watching: peer.iWatch,
       label: `● ${name} está compartilhando`,
-      hint: failed || peer.iWatch ? '' : 'O vídeo só chega para quem assiste',
+      hint: failed ? '' : peer.iWatch ? (peer.hasAudio ? '' : 'sem som') : 'O vídeo só chega para quem assiste',
+      sound: peer.iWatch && peer.hasAudio && !failed,
       waitingText: `${name} está compartilhando a tela`,
       canUnwatch: peer.iWatch && !failed,
       failedText: failed ? (peer.retrying ? 'Tentando conectar de novo…' : `Não foi possível conectar com ${name}`) : '',
     });
     peer.screen.retryBtn.hidden = !!peer.retrying;
+    peer.screen.video.volume = soundVolume;
+    peer.screen.video.muted = !peer.iWatch || soundMuted;
   }
   const shown = (localTrack ? 1 : 0) + list.filter((p) => p.sharing).length;
   $('empty').hidden = shown > 0;
@@ -869,8 +1039,8 @@ function refresh() {
 
 // ---------- início ----------
 
-$('room-tag').textContent = `# ${roomName(roomId)}`;
-$('room-title').textContent = `Sala ${roomName(roomId)}`;
+$('room-tag').textContent = `# ${displayRoomName(roomId)}`;
+$('room-title').textContent = roomId === homeRoomId() ? 'Sala fixa' : `Sala ${roomName(roomId)}`;
 if (!canShare) {
   shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';

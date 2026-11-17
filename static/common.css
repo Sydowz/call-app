@@ -42,7 +42,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .btn.small { height: 36px; border-radius: 10px; font-weight: 600; }
 .btn.primary { background: var(--accent); color: #fff; font-weight: 600; }
 .btn.danger { background: var(--danger-bg); color: var(--danger); font-weight: 600; }
-.logo { flex: none; width: 32px; height: 32px; border-radius: 10px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; user-select: none; text-decoration: none; }
+.logo { flex: none; display: block; width: 32px; height: 32px; border-radius: 10px; user-select: none; }
+.logo img { display: block; width: 100%; height: 100%; }
 .short { display: none; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .field input { height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--raised); font-size: 14px; }
@@ -64,7 +65,7 @@ dialog p { margin: 0; }
 .actions { display: flex; gap: 8px; }
 .actions .btn { flex: 1; }
 
-.toast { position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; background: var(--raised); border: 1px solid var(--border-strong); font-size: 13px; z-index: 10; }
+.toast { position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); padding: 8px 14px; border-radius: 16px; background: var(--raised); border: 1px solid var(--border-strong); font-size: 13px; text-align: center; z-index: 10; }
 
 @media (max-width: 760px) {
   .long { display: none; }

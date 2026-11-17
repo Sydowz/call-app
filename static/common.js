@@ -156,12 +156,12 @@ $('profile-form').onsubmit = (e) => {
 };
 
 let toastTimer = null;
-function toast(text) {
+function toast(text, ms = 2500) {
   const node = $('toast');
   node.textContent = text;
   node.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (node.hidden = true), 2500);
+  toastTimer = setTimeout(() => (node.hidden = true), ms);
 }
 
 // ---------- salas ----------
@@ -198,4 +198,58 @@ function rememberRoom(id) {
 
 function roomUrl(id) {
   return `${location.origin}/room/${id}`;
+}
+
+function slugify(text) {
+  return text.normalize('NFD').replace(/[̀-ͯ]/g, '') // "Sábado" -> "Sabado"
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    .slice(0, 40).replace(/-+$/, '');
+}
+
+function randomChars(count, alphabet) {
+  return Array.from(crypto.getRandomValues(new Uint8Array(count)), (b) => alphabet[b % alphabet.length]).join('');
+}
+
+// A name gets a 6-character random suffix so strangers can't guess the room;
+// no name gives a fully random ID.
+function newRoomId(name) {
+  const slug = slugify(name);
+  return slug
+    ? `${slug}-${randomChars(6, 'abcdefghijklmnopqrstuvwxyz0123456789')}`
+    : randomChars(16, '0123456789abcdef');
+}
+
+function colorFor(id) {
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+}
+
+// ---------- sala fixa ----------
+
+// Your fixed room: created once, kept in this browser, and always one click
+// away (like a Discord group). It is a normal room with a stable, unguessable
+// ID; the server knows nothing about it. Without storage (private mode) it
+// lasts until the page is closed.
+let homeFallback = '';
+function homeRoomId() {
+  const saved = load('home-room');
+  if (validRoomId(saved)) return saved;
+  const id = homeFallback || newRoomId('');
+  homeFallback = id;
+  save('home-room', id);
+  return id;
+}
+
+function displayRoomName(id) {
+  return id === homeRoomId() ? 'Sala fixa' : roomName(id);
+}
+
+// Fixed room first, then pinned ones, then the rest by most recent.
+function orderedRooms() {
+  const home = homeRoomId();
+  const rest = loadRooms()
+    .filter((r) => r.id !== home)
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.at - a.at);
+  return [{ id: home, at: 0, pinned: true, home: true }, ...rest];
 }
