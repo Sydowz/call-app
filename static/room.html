@@ -91,6 +91,8 @@
     .voice-icon svg { width: 14px; height: 14px; }
     .icon-btn svg, .icon-btn-lg svg { width: 18px; height: 18px; }
     .icon-btn-lg { width: 44px; padding: 0; }
+    .ptt-note { font-size: 12px; }
+    .icon-btn.talking, .icon-btn-lg.talking { background: rgb(59 217 138 / .18); color: var(--online); box-shadow: 0 0 0 2px var(--online); } /* push-to-talk held */
     .icon-btn[aria-pressed="true"], .icon-btn-lg[aria-pressed="true"] { background: var(--danger-bg); color: var(--danger); }
     .voice-join { background: rgb(59 217 138 / .14); color: var(--online); font-weight: 600; }
     .voice-leave { background: var(--danger-bg); color: var(--danger); font-weight: 600; }
@@ -254,6 +256,8 @@
         <div class="meter" aria-hidden="true"><div class="meter-fill" id="vs-meter"></div></div>
       </div>
       <label class="switch-row">Supressão de ruído<input type="checkbox" role="switch" id="vs-ns"></label>
+      <label class="switch-row">Apertar para falar<input type="checkbox" role="switch" id="vs-ptt"></label>
+      <div class="field" id="vs-ptt-row" hidden><span class="muted">Tecla para falar</span><button type="button" class="btn small" id="vs-ptt-key"></button><span class="muted ptt-note">Funciona com esta aba em foco. Jogos em primeiro plano não repassam teclas ao navegador.</span></div>
       <label class="field"><span class="muted">Volume das vozes</span><input type="range" id="vs-volume" min="0" max="1" step="0.05"></label>
       <button class="btn small primary">Pronto</button>
     </form>
