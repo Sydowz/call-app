@@ -164,9 +164,12 @@ async function handleSignal(peer, data) {
     if (myId > peer.id) restartIce(peer); // they asked us to redo the connection
   } else if ('watch' in data) {
     // Ignore a request that crossed with us stopping the share.
+    const viewersBefore = viewerCount();
     peer.watchesMe = !!data.watch && !!localTrack;
     sendScreenTo(peer);
-    refresh();
+    // Crossing 3 viewers changes the Jogo budget for everyone watching.
+    if ((viewersBefore >= 3) !== (viewerCount() >= 3)) retune();
+    else refresh();
   }
 }
 
