@@ -57,3 +57,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 ## Contribuir
 
 Contribuições são bem-vindas, sempre com revisão do mantenedor. Veja o [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licença
+
+[MIT](LICENSE).
