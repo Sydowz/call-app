@@ -296,12 +296,14 @@ function createPeer(id, initiator) {
   peer.profileKnown = new Promise((resolve) => (peer.resolveProfile = resolve));
   peer.screen.watchBtn.onclick = () => setWatch(peer, true);
   peer.screen.unwatchBtn.onclick = () => setWatch(peer, false);
+  peer.screen.retryBtn.onclick = () => retryConnection(peer);
   peers.set(id, peer);
 
   pc.onicecandidate = (e) => {
     if (e.candidate) send(id, { candidate: e.candidate });
   };
   pc.onconnectionstatechange = () => {
+    if (pc.connectionState !== 'failed') peer.retrying = false;
     if (pc.connectionState === 'connected') tuneSender(peer); // encodings exist now
     refresh();
   };
@@ -401,6 +403,8 @@ async function handleSignal(peer, data) {
   } else if ('chat' in data) {
     const text = cleanChat(data.chat);
     if (text) addMessage({ authorId: peer.id, name: displayName(peer), photo: peer.photo, text });
+  } else if ('restart' in data) {
+    if (myId > peer.id) restartIce(peer); // they asked us to redo the connection
   } else if ('watch' in data) {
     // Ignore a request that crossed with us stopping the share.
     peer.watchesMe = !!data.watch && !!localTrack;
@@ -489,6 +493,29 @@ function setShareMode(mode) {
 }
 $('mode-jogo').onclick = () => setShareMode('jogo');
 $('mode-texto').onclick = () => setShareMode('texto');
+
+// "Tentar de novo": an ICE restart (new offer with fresh ICE credentials).
+// Only the participant with the higher number sends it, so both sides
+// clicking at once can't produce two colliding offers; the other one asks.
+function retryConnection(peer) {
+  peer.retrying = true;
+  refresh();
+  setTimeout(() => {
+    if (peer.pc.connectionState === 'failed') {
+      peer.retrying = false; // give the button back if nothing changed
+      refresh();
+    }
+  }, 15_000);
+  if (myId > peer.id) restartIce(peer);
+  else send(peer.id, { restart: true });
+}
+
+function restartIce(peer) {
+  enqueue(peer, async () => {
+    await peer.pc.setLocalDescription(await peer.pc.createOffer({ iceRestart: true }));
+    send(peer.id, { description: peer.pc.localDescription });
+  });
+}
 
 function setWatch(peer, watch) {
   peer.iWatch = watch;
@@ -741,7 +768,16 @@ function buildScreen() {
   const waitingText = el('span');
   const watchBtn = el('button', 'btn primary', 'Assistir');
   waiting.append(waitingText, watchBtn);
-  frame.append(video, waiting);
+  const failed = el('div', 'waiting failed');
+  failed.hidden = true;
+  const failedText = el('strong');
+  const retryBtn = el('button', 'btn primary', 'Tentar de novo');
+  failed.append(
+    failedText,
+    el('span', null, 'Costuma acontecer com VPN ligada, 4G ou rede de empresa. Desligar a VPN costuma resolver.'),
+    retryBtn,
+  );
+  frame.append(video, waiting, failed);
   const pill = el('span', 'pill');
   const hint = el('span', 'hint muted');
   const unwatchBtn = el('button', 'btn small', 'Parar de assistir');
@@ -749,7 +785,7 @@ function buildScreen() {
   foot.append(pill, hint, unwatchBtn);
   card.append(frame, foot);
   $('screens').append(card);
-  return { card, video, waiting, waitingText, watchBtn, pill, hint, unwatchBtn };
+  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, unwatchBtn };
 }
 
 function peerStatus(peer) {
@@ -787,10 +823,15 @@ function personTile(person) {
 }
 
 // `watching` false shows the "Assistir" placeholder instead of the video.
-function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false }) {
+// `failedText` replaces both the video and the "Assistir" placeholder.
+function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false, failedText = '' }) {
   screen.card.hidden = !visible;
-  screen.video.hidden = !watching;
-  screen.waiting.hidden = watching;
+  screen.video.hidden = !watching || !!failedText;
+  screen.waiting.hidden = watching || !!failedText;
+  if (screen.failed) {
+    screen.failed.hidden = !failedText;
+    screen.failedText.textContent = failedText;
+  }
   screen.waitingText.textContent = waitingText;
   screen.pill.textContent = label;
   screen.hint.textContent = hint;
@@ -823,14 +864,17 @@ function refresh() {
   });
   for (const peer of list) {
     const name = displayName(peer);
+    const failed = peer.pc.connectionState === 'failed';
     showScreen(peer.screen, {
       visible: peer.sharing,
       watching: peer.iWatch,
       label: `● ${name} está compartilhando`,
-      hint: peer.iWatch ? 'Tela cheia: duplo clique' : 'O vídeo só chega para quem assiste',
+      hint: failed ? '' : peer.iWatch ? 'Tela cheia: duplo clique' : 'O vídeo só chega para quem assiste',
       waitingText: `${name} está compartilhando a tela`,
-      canUnwatch: peer.iWatch,
+      canUnwatch: peer.iWatch && !failed,
+      failedText: failed ? (peer.retrying ? 'Tentando conectar de novo…' : `Não foi possível conectar com ${name}`) : '',
     });
+    peer.screen.retryBtn.hidden = !!peer.retrying;
   }
   const shown = (localTrack ? 1 : 0) + list.filter((p) => p.sharing).length;
   $('empty').hidden = shown > 0;
