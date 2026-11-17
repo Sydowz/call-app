@@ -574,7 +574,7 @@ function updateUnread() {
   if (chatVisible()) unread = 0;
   $('chat-badge').hidden = unread === 0;
   $('chat-badge').textContent = String(unread);
-  document.title = unread ? `(${unread}) Friends Call` : 'Friends Call';
+  document.title = unread ? `(${unread}) CPX Call` : 'CPX Call';
 }
 
 // Builds text with http(s) links as anchors, never as HTML.
@@ -674,10 +674,10 @@ $('home').onclick = (e) => {
 // message goes to the clipboard.
 async function invite() {
   const url = location.href;
-  const text = `Bora? Entra na sala ${roomName(roomId)} do Friends Call:`;
+  const text = `Bora? Entra na sala ${roomName(roomId)} do CPX Call:`;
   if (navigator.share && mobile.matches) {
     try {
-      await navigator.share({ title: 'Friends Call', text, url });
+      await navigator.share({ title: 'CPX Call', text, url });
       return;
     } catch (err) {
       if (err.name === 'AbortError') return; // closed the share sheet
