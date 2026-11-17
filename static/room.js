@@ -517,6 +517,20 @@ function restartIce(peer) {
   });
 }
 
+// Fullscreen on desktop and Android; iPhone Safari only supports it on the
+// <video> element through its own webkit API. Phones also try landscape.
+function enterFullscreen(video) {
+  const landscape = () => screen.orientation?.lock?.('landscape').catch(() => {});
+  if (video.requestFullscreen) {
+    video.requestFullscreen().then(landscape, () => video.webkitEnterFullscreen?.());
+  } else {
+    video.webkitEnterFullscreen?.();
+  }
+}
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) screen.orientation?.unlock?.();
+});
+
 function setWatch(peer, watch) {
   peer.iWatch = watch;
   send(peer.id, { watch });
@@ -763,7 +777,7 @@ function buildScreen() {
   video.muted = true;
   video.playsInline = true;
   video.title = 'Duplo clique para tela cheia';
-  video.ondblclick = () => video.requestFullscreen?.();
+  video.ondblclick = () => enterFullscreen(video);
   const waiting = el('div', 'waiting');
   const waitingText = el('span');
   const watchBtn = el('button', 'btn primary', 'Assistir');
@@ -780,12 +794,15 @@ function buildScreen() {
   frame.append(video, waiting, failed);
   const pill = el('span', 'pill');
   const hint = el('span', 'hint muted');
-  const unwatchBtn = el('button', 'btn small', 'Parar de assistir');
+  const fullBtn = el('button', 'btn small', 'Tela cheia');
+  fullBtn.onclick = () => enterFullscreen(video);
+  const unwatchBtn = el('button', 'btn small');
+  unwatchBtn.append(el('span', 'long', 'Parar de assistir'), el('span', 'short', 'Parar'));
   const foot = el('div', 'screen-foot');
-  foot.append(pill, hint, unwatchBtn);
+  foot.append(pill, hint, fullBtn, unwatchBtn);
   card.append(frame, foot);
   $('screens').append(card);
-  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, unwatchBtn };
+  return { card, video, waiting, waitingText, watchBtn, failed, failedText, retryBtn, pill, hint, fullBtn, unwatchBtn };
 }
 
 function peerStatus(peer) {
@@ -825,6 +842,7 @@ function personTile(person) {
 // `watching` false shows the "Assistir" placeholder instead of the video.
 // `failedText` replaces both the video and the "Assistir" placeholder.
 function showScreen(screen, { visible, watching, label, hint, waitingText = '', canUnwatch = false, failedText = '' }) {
+  screen.fullBtn.hidden = !canUnwatch; // only for a screen you are watching
   screen.card.hidden = !visible;
   screen.video.hidden = !watching || !!failedText;
   screen.waiting.hidden = watching || !!failedText;
@@ -869,7 +887,7 @@ function refresh() {
       visible: peer.sharing,
       watching: peer.iWatch,
       label: `● ${name} está compartilhando`,
-      hint: failed ? '' : peer.iWatch ? 'Tela cheia: duplo clique' : 'O vídeo só chega para quem assiste',
+      hint: failed || peer.iWatch ? '' : 'O vídeo só chega para quem assiste',
       waitingText: `${name} está compartilhando a tela`,
       canUnwatch: peer.iWatch && !failed,
       failedText: failed ? (peer.retrying ? 'Tentando conectar de novo…' : `Não foi possível conectar com ${name}`) : '',
