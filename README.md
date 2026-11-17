@@ -41,7 +41,7 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 
 - Sem TURN: em algumas redes (NAT simétrico, redes corporativas, alguns 4G) a conexão P2P falha. O nome do participante aparece com "falha na conexão P2P".
 - Mesh: quem compartilha envia uma cópia do vídeo para cada pessoa *que está assistindo*. Com a sala cheia (12) isso dá até 11 envios, o que exige um bom upload; salas bem maiores pedem um servidor de mídia (SFU, issue #25).
-- Se cair a conexão com o servidor, é preciso recarregar a página (não há reconexão automática).
+- Se a conexão com o servidor cair, o app reconecta sozinho (1s, 2s, 4s… até 30s entre tentativas) e refaz as conexões; quem estava compartilhando continua, mas quem assistia precisa clicar em Assistir de novo.
 
 ## Decisões técnicas
 
