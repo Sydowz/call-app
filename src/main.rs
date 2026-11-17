@@ -44,6 +44,8 @@ const ROOM_JS: &str = include_str!("../static/room.js");
 const LOBBY_JS: &str = include_str!("../static/lobby.js");
 const COMMON_JS: &str = include_str!("../static/common.js");
 const COMMON_CSS: &str = include_str!("../static/common.css");
+const FAVICON_SVG: &str = include_str!("../static/favicon.svg");
+const TOUCH_ICON_PNG: &[u8] = include_bytes!("../static/apple-touch-icon.png");
 
 /// Most rooms the lobby may ask about in one request.
 const MAX_COUNT_IDS: usize = 30;
@@ -95,6 +97,19 @@ fn app(rooms: Rooms, ice: Arc<Ice>) -> Router {
                 )
             }),
         )
+        .route(
+            "/favicon.svg",
+            get(|| async { icon("image/svg+xml", FAVICON_SVG.as_bytes()) }),
+        )
+        // Phones' home-screen icon; also answers browsers that ask for /favicon.ico.
+        .route(
+            "/apple-touch-icon.png",
+            get(|| async { icon("image/png", TOUCH_ICON_PNG) }),
+        )
+        .route(
+            "/favicon.ico",
+            get(|| async { icon("image/png", TOUCH_ICON_PNG) }),
+        )
         .route("/api/rooms", get(room_counts))
         .route("/api/ice", get(ice_servers))
         .route("/ws/{id}", get(signaling::ws_handler))
@@ -109,6 +124,16 @@ async fn room_page(Path(id): Path<String>) -> Response {
     } else {
         Redirect::to("/").into_response()
     }
+}
+
+fn icon(content_type: &'static str, bytes: &'static [u8]) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
+    )
 }
 
 fn javascript(source: &'static str) -> impl IntoResponse {
@@ -215,9 +240,10 @@ mod tests {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 let mut stream = TcpStream::connect(addr).await.unwrap();
                 stream.write_all(request.as_bytes()).await.unwrap();
-                let mut response = String::new();
-                stream.read_to_string(&mut response).await.unwrap();
-                response
+                // Bytes, not a String: some responses (the PNG icon) aren't UTF-8.
+                let mut response = Vec::new();
+                stream.read_to_end(&mut response).await.unwrap();
+                String::from_utf8_lossy(&response).into_owned()
             }
         };
 
@@ -230,6 +256,12 @@ mod tests {
         assert!(get("/common.js").await.contains("text/javascript"));
         assert!(get("/lobby.js").await.contains("text/javascript"));
         assert!(get("/common.css").await.contains("content-type: text/css"));
+        assert!(get("/favicon.svg")
+            .await
+            .contains("content-type: image/svg+xml"));
+        assert!(get("/apple-touch-icon.png")
+            .await
+            .contains("content-type: image/png"));
         let health = get("/health").await;
         assert!(health.starts_with("HTTP/1.1 200") && health.ends_with("ok"));
     }
