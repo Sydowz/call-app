@@ -63,7 +63,7 @@ async function photoFromFile(file) {
 }
 
 function profileMsg() {
-  return { nick: myNick, photo: myPhoto };
+  return { nick: myNick, photo: myPhoto, hwH264 };
 }
 
 function cleanNick(value) {
@@ -186,21 +186,46 @@ function enterRoom(takeover = false) {
 
 // ---------- sinalização (WebSocket) ----------
 
-function join() {
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
+// Reconnection: when the WebSocket drops, the server has already removed us
+// and the others closed their connections to us, so we drop ours too and come
+// back as a new participant, retrying with a growing delay.
+const RETRY_MAX_MS = 30_000;
+let retryDelay = 1000;
+let reconnecting = false;
+let reconnectTimer = null;
+
+async function join() {
+  hwH264 = await hwH264Ready; // must be in the first profile we send
+  const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
+  ws = socket;
   ws.onmessage = onMessage;
   ws.onclose = () => {
-    if (left) return;
-    shareBtn.disabled = true;
+    if (left || socket !== ws) return;
     setChatEnabled(false);
-    clearInterval(timer);
     if (roomFull) {
+      shareBtn.disabled = true;
+      clearInterval(timer);
       showNotice('Sala cheia', `Esta sala já tem ${maxPeers} pessoas. Tente de novo mais tarde ou crie outra.`);
-    } else {
-      showNotice('Conexão perdida', 'Você foi desconectado do servidor.');
+      return;
     }
+    if (!reconnecting) addSystem('Conexão perdida. Reconectando…');
+    reconnecting = true;
+    [...peers.keys()].forEach(removePeer);
+    myId = null;
+    refresh();
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(join, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
   };
 }
+
+// Back online: don't wait for the current back-off delay.
+window.addEventListener('online', () => {
+  if (!reconnecting || left) return;
+  clearTimeout(reconnectTimer);
+  retryDelay = 1000;
+  join();
+});
 
 function onMessage(ev) {
   const msg = JSON.parse(ev.data);
@@ -209,11 +234,15 @@ function onMessage(ev) {
       myId = msg.id;
       maxPeers = msg.max ?? maxPeers;
       shareBtn.disabled = !canShare;
-      const joinedAt = Date.now();
-      timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
+      retryDelay = 1000;
+      if (!timer) { // keeps counting across reconnections
+        const joinedAt = Date.now();
+        timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
+      }
       for (const id of msg.peers) createPeer(id, true);
       setChatEnabled(true);
-      addSystem('Você entrou na sala. As mensagens do chat não ficam salvas.');
+      addSystem(reconnecting ? 'Reconectado.' : 'Você entrou na sala. As mensagens do chat não ficam salvas.');
+      reconnecting = false;
       refresh();
       break;
     }
@@ -228,7 +257,10 @@ function onMessage(ev) {
     }
     case 'signal': {
       const peer = peers.get(msg.from) ?? createPeer(msg.from, false);
-      enqueue(peer, () => handleSignal(peer, msg.data));
+      // Profiles don't depend on negotiation order, and our offer waits for
+      // theirs (codec choice), so they skip the queue.
+      if (msg.data && typeof msg.data === 'object' && 'nick' in msg.data) handleProfile(peer, msg.data);
+      else enqueue(peer, () => handleSignal(peer, msg.data));
       break;
     }
     case 'full':
@@ -257,9 +289,11 @@ function createPeer(id, initiator) {
     id, nick: '', photo: '', pc, transceiver: null,
     sharing: false, iWatch: false, watchesMe: false,
     announced: initiator, // people already here when we joined don't get an "entrou" line
+    hwH264: false,
     queue: Promise.resolve(),
     screen: buildScreen(),
   };
+  peer.profileKnown = new Promise((resolve) => (peer.resolveProfile = resolve));
   peer.screen.watchBtn.onclick = () => setWatch(peer, true);
   peer.screen.unwatchBtn.onclick = () => setWatch(peer, false);
   peers.set(id, peer);
@@ -267,15 +301,22 @@ function createPeer(id, initiator) {
   pc.onicecandidate = (e) => {
     if (e.candidate) send(id, { candidate: e.candidate });
   };
-  pc.onconnectionstatechange = refresh;
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') tuneSender(peer); // encodings exist now
+    refresh();
+  };
 
   if (initiator) {
     // Whoever joins later sends the offer, so each pair negotiates exactly once.
     // One "sendrecv" video transceiver carries a screen in each direction;
     // starting or stopping a share later is just replaceTrack(), with no
     // renegotiation (and therefore no colliding offers between two peers).
-    attachTransceiver(peer, pc.addTransceiver('video', { direction: 'sendrecv' }));
+    const transceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
+    attachTransceiver(peer, transceiver);
     enqueue(peer, async () => {
+      // Their profile says what they encode well; give up waiting after 3s.
+      await Promise.race([peer.profileKnown, new Promise((r) => setTimeout(r, 3000))]);
+      preferCodecs(transceiver, peer);
       await pc.setLocalDescription(); // creates the offer implicitly
       send(id, { description: pc.localDescription });
     });
@@ -285,6 +326,46 @@ function createPeer(id, initiator) {
   if (localTrack) send(id, { sharing: true });
   refresh();
   return peer;
+}
+
+// Codec choice. A sender uses the first codec of the *other* side's list, so
+// each side orders its list by what the remote can encode well:
+// - H.264 first only if the remote encodes it on the GPU (NVENC, AMF,
+//   QuickSync: barely touches a running game) and we are not Firefox, whose
+//   H.264 needs a separately downloaded plugin that may be missing.
+// - Otherwise VP8 first: it works everywhere, and software H.264 is no lighter.
+const isFirefox = /firefox/i.test(navigator.userAgent);
+let hwH264 = false; // sent to the others with our profile
+const hwH264Ready = detectHwH264();
+
+async function detectHwH264() {
+  if (isFirefox || !navigator.mediaCapabilities?.encodingInfo) return false;
+  try {
+    const info = await navigator.mediaCapabilities.encodingInfo({
+      type: 'webrtc',
+      video: { contentType: 'video/H264', width: 1920, height: 1080, bitrate: 2_500_000, framerate: 30 },
+    });
+    return info.supported && info.powerEfficient;
+  } catch {
+    return false;
+  }
+}
+
+function preferCodecs(transceiver, peer) {
+  const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs;
+  if (!transceiver.setCodecPreferences || !codecs) return;
+  const mime = (c) => c.mimeType.toLowerCase();
+  const wantH264 = peer.hwH264 && !isFirefox && codecs.some((c) => mime(c) === 'video/h264');
+  const rank = (c) => {
+    if (mime(c) === 'video/h264') return wantH264 ? 0 : 2;
+    if (mime(c) === 'video/vp8') return wantH264 ? 1 : 0;
+    return 1; // VP9/AV1 (CPU-heavy) after VP8; rtx/red/ulpfec ride along
+  };
+  try {
+    transceiver.setCodecPreferences([...codecs].sort((a, b) => rank(a) - rank(b)));
+  } catch (err) {
+    console.warn('codec preferences', err);
+  }
 }
 
 function attachTransceiver(peer, transceiver) {
@@ -304,6 +385,7 @@ async function handleSignal(peer, data) {
       // switch it to "sendrecv" so we can share our screen back later.
       const transceiver = pc.getTransceivers()[0];
       transceiver.direction = 'sendrecv';
+      preferCodecs(transceiver, peer); // their profile arrived before the offer
       await pc.setLocalDescription(); // creates the answer implicitly
       send(peer.id, { description: pc.localDescription });
       attachTransceiver(peer, transceiver);
@@ -324,15 +406,19 @@ async function handleSignal(peer, data) {
     peer.watchesMe = !!data.watch && !!localTrack;
     sendScreenTo(peer);
     refresh();
-  } else if ('nick' in data) {
-    peer.nick = cleanNick(data.nick);
-    peer.photo = validPhoto(data.photo);
-    if (!peer.announced) {
-      peer.announced = true; // wait for the nick so the line has a name
-      addSystem(`${displayName(peer)} entrou`);
-    }
-    refresh();
   }
+}
+
+function handleProfile(peer, data) {
+  peer.nick = cleanNick(data.nick);
+  peer.photo = validPhoto(data.photo);
+  peer.hwH264 = data.hwH264 === true;
+  peer.resolveProfile();
+  if (!peer.announced) {
+    peer.announced = true; // wait for the nick so the line has a name
+    addSystem(`${displayName(peer)} entrou`);
+  }
+  refresh();
 }
 
 // Video only flows to peers that clicked "Assistir": everyone else gets a null
@@ -341,8 +427,68 @@ function sendScreenTo(peer) {
   if (!peer.transceiver) return; // attached later, once that peer's offer arrives
   const track = localTrack && peer.watchesMe ? localTrack : null;
   if (peer.transceiver.sender.track === track) return;
-  peer.transceiver.sender.replaceTrack(track).catch((err) => console.warn(err));
+  peer.transceiver.sender.replaceTrack(track)
+    .then(() => track && tuneSender(peer))
+    .catch((err) => console.warn(err));
 }
+
+// ---------- modo Jogo / Texto ----------
+
+// Jogo: smooth and light. Texto: sharp text for code and documents, at a low
+// frame rate. The caps are applied in the encoder (works for any capture
+// source) and, best effort, in the capture itself.
+const MODES = {
+  jogo: { hint: 'motion', fps: 30, maxHeight: 720, bitrate: 2_500_000, degradation: 'maintain-framerate' },
+  texto: { hint: 'text', fps: 15, maxHeight: 1080, bitrate: 2_500_000, degradation: 'maintain-resolution' },
+};
+let shareMode = load('shareMode') === 'texto' ? 'texto' : 'jogo';
+
+function captureConstraints() {
+  const mode = MODES[shareMode];
+  return { frameRate: { ideal: mode.fps, max: mode.fps }, height: { max: mode.maxHeight } };
+}
+
+function encoderSettings(sender) {
+  const mode = MODES[shareMode];
+  const height = sender.track.getSettings().height || mode.maxHeight;
+  return {
+    maxBitrate: mode.bitrate,
+    maxFramerate: mode.fps,
+    scaleResolutionDownBy: Math.max(1, height / mode.maxHeight),
+  };
+}
+
+async function tuneSender(peer) {
+  const sender = peer.transceiver?.sender;
+  if (!sender?.track) return;
+  const params = sender.getParameters();
+  if (!params.encodings?.length) return; // not negotiated yet: retried once connected
+  Object.assign(params.encodings[0], encoderSettings(sender));
+  params.degradationPreference = MODES[shareMode].degradation;
+  try {
+    await sender.setParameters(params);
+  } catch {
+    // Some browsers reject degradationPreference: retry with fresh params without it.
+    const retry = sender.getParameters();
+    if (!retry.encodings?.length) return;
+    Object.assign(retry.encodings[0], encoderSettings(sender));
+    await sender.setParameters(retry).catch((err) => console.warn('encoder', err));
+  }
+}
+
+function setShareMode(mode) {
+  shareMode = mode;
+  save('shareMode', mode);
+  if (localTrack) {
+    localTrack.contentHint = MODES[mode].hint;
+    localTrack.applyConstraints(captureConstraints())
+      .catch(() => { /* capture caps are best effort; the encoder caps still apply */ })
+      .finally(() => peers.forEach(tuneSender));
+  }
+  refresh();
+}
+$('mode-jogo').onclick = () => setShareMode('jogo');
+$('mode-texto').onclick = () => setShareMode('texto');
 
 function setWatch(peer, watch) {
   peer.iWatch = watch;
@@ -366,16 +512,30 @@ shareBtn.onclick = () => (localTrack ? stopShare() : startShare());
 async function startShare() {
   let stream;
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: captureConstraints(), audio: false });
   } catch {
     return; // usuário cancelou a escolha
   }
   localTrack = stream.getVideoTracks()[0];
-  // "text" makes the encoder keep resolution (sharp text) and drop frames instead.
-  localTrack.contentHint = 'text';
+  // "motion" keeps the frame rate (games); "text" keeps sharpness (code).
+  localTrack.contentHint = MODES[shareMode].hint;
   localTrack.onended = stopShare; // the browser's own "stop sharing" bar
-  localScreen.video.srcObject = new MediaStream([localTrack]);
+  setPreview(previewOn);
   peers.forEach((peer) => send(peer.id, { sharing: true })); // video only once they ask
+  refresh();
+}
+
+// Our own preview is one more video to decode and paint, so it starts hidden.
+let previewOn = load('preview') === 'on';
+localScreen.watchBtn.textContent = 'Mostrar prévia';
+localScreen.unwatchBtn.textContent = 'Esconder prévia';
+localScreen.watchBtn.onclick = () => setPreview(true);
+localScreen.unwatchBtn.onclick = () => setPreview(false);
+
+function setPreview(on) {
+  previewOn = on;
+  save('preview', on ? 'on' : '');
+  localScreen.video.srcObject = on && localTrack ? new MediaStream([localTrack]) : null;
   refresh();
 }
 
@@ -395,6 +555,7 @@ function stopShare() {
 
 function leaveRoom(title, text, action) {
   left = true;
+  clearTimeout(reconnectTimer);
   stopShare();
   ws?.close();
   clearInterval(timer);
@@ -654,9 +815,11 @@ function refresh() {
   const viewers = list.filter((p) => p.watchesMe).length;
   showScreen(localScreen, {
     visible: !!localTrack,
-    watching: true,
+    watching: previewOn,
     label: '● Você está compartilhando',
     hint: viewers === 0 ? 'ninguém assistindo' : viewers === 1 ? '1 pessoa assistindo' : `${viewers} pessoas assistindo`,
+    waitingText: 'Sua tela está indo para quem clicar em Assistir. A prévia fica escondida para poupar o PC.',
+    canUnwatch: previewOn,
   });
   for (const peer of list) {
     const name = displayName(peer);
@@ -673,6 +836,7 @@ function refresh() {
   $('empty').hidden = shown > 0;
   $('screens').style.setProperty('--cols', shown > 2 ? 2 : 1);
   $('live').hidden = shown === 0;
+  $('reconnecting').hidden = !reconnecting;
 
   paintAvatar($('me-avatar'), myNick, myId, myPhoto);
   $('me-nick').textContent = myNick;
@@ -681,13 +845,17 @@ function refresh() {
 
   $('share-long').textContent = localTrack ? 'Parar compartilhamento' : 'Compartilhar tela';
   $('share-short').textContent = localTrack ? 'Parar' : 'Tela';
+  $('mode-jogo').setAttribute('aria-pressed', String(shareMode === 'jogo'));
+  $('mode-texto').setAttribute('aria-pressed', String(shareMode === 'texto'));
 }
 
 // ---------- início ----------
 
-const shortId = roomId.slice(0, 8);
-$('room-tag').textContent = `# ${shortId}`;
-$('room-title').textContent = `Sala ${shortId}`;
+// "churrasco-k3f9" (name + random suffix) shows as "churrasco"; random IDs
+// show their first 8 characters.
+const roomName = roomId.match(/^(.+)-[a-z0-9]{4}$/)?.[1] ?? roomId.slice(0, 8);
+$('room-tag').textContent = `# ${roomName}`;
+$('room-title').textContent = `Sala ${roomName}`;
 if (!canShare) {
   shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';

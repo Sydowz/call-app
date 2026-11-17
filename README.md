@@ -27,6 +27,18 @@ Abra http://localhost:3000. Você cai numa sala nova (`/room/<id>`). É só copi
 - Túnel HTTPS (mais fácil, funciona também pela internet): `cloudflared tunnel --url http://localhost:3000` (ou ngrok). Use o link `https://…` que ele mostrar.
 - Só para teste na rede local, no Chrome: em `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, adicione `http://<IP>:3000` e reinicie o navegador.
 
+## Colocar no ar (Fly.io)
+
+O projeto já vem com `Dockerfile` e `fly.toml` (região São Paulo, uma máquina sempre ligada, porque as salas ficam em memória). O Fly.io dá um endereço `https://<nome>.fly.dev` com HTTPS, então não precisa de domínio para começar.
+
+```sh
+fly auth signup                      # ou: fly auth login
+fly apps create <nome-unico>         # e troque `app = "..."` no fly.toml por esse nome
+fly deploy
+```
+
+Depois é só abrir `https://<nome-unico>.fly.dev`. Para mudar o limite de pessoas: `fly secrets set MAX_PEERS=20` (ou edite `[env]` no `fly.toml`). Logs: `fly logs`.
+
 ## Desenvolvimento
 
 ```sh
@@ -41,13 +53,15 @@ Código: [src/main.rs](src/main.rs) (rotas e páginas), [src/rooms.rs](src/rooms
 
 - Sem TURN: em algumas redes (NAT simétrico, redes corporativas, alguns 4G) a conexão P2P falha. O nome do participante aparece com "falha na conexão P2P".
 - Mesh: quem compartilha envia uma cópia do vídeo para cada pessoa *que está assistindo*. Com a sala cheia (12) isso dá até 11 envios, o que exige um bom upload; salas bem maiores pedem um servidor de mídia (SFU, issue #25).
-- Se cair a conexão com o servidor, é preciso recarregar a página (não há reconexão automática).
+- Se a conexão com o servidor cair, o app reconecta sozinho (1s, 2s, 4s… até 30s entre tentativas) e refaz as conexões; quem estava compartilhando continua, mas quem assistia precisa clicar em Assistir de novo.
 
 ## Decisões técnicas
 
 - **HTML/JS embutidos no binário com `include_str!` em vez de `tower-http`**: uma dependência a menos e um binário único. A desvantagem é que qualquer mudança no HTML exige recompilar.
 - **ID da sala gerado no navegador (`crypto.getRandomValues`)**: o servidor não precisa do crate `rand`.
 - **Uma única transceiver de vídeo `sendrecv` por par, negociada uma vez só, por quem entra**: iniciar e parar o compartilhamento é só `replaceTrack()`, sem renegociação. Assim não há colisão de offers e o padrão "perfect negotiation" fica dispensável.
+- **H.264 só quando ajuda**: cada navegador detecta se codifica H.264 na placa de vídeo (Media Capabilities, `powerEfficient`) e avisa os outros junto com o nick. Quem compartilha só usa H.264 se tiver encoder de hardware e quem assiste não for Firefox (que depende de um plugin que pode faltar); senão, VP8, que funciona em todo navegador.
+- **Modo Jogo / Texto**: Jogo (padrão) prioriza fluidez, até 720p a 30 FPS com `contentHint = "motion"`; Texto prioriza nitidez, até 1080p a 15 FPS com `contentHint = "text"`. Os limites ficam no encoder (`scaleResolutionDownBy`, `maxFramerate`, `maxBitrate` de 2,5 Mbps), o que funciona com qualquer captura. No Jogo a imagem começa mais baixa e fica nítida em uns 15 s, conforme a estimativa de banda sobe.
 - **Assistir sob demanda**: quem compartilha só envia o vídeo para quem clicou em "Assistir" (`replaceTrack` com a track para quem assiste e `null` para os outros). Assim ninguém codifica nem decodifica vídeo que não está sendo visto, o que pesa bastante para quem está jogando.
 - **O aviso "compartilhando/parou" vai pelo próprio WebSocket** em vez de um DataChannel. O servidor repassa esse aviso sem ler o conteúdo, como faz com o resto.
 - **`tokio::select!` num socket só, em vez de dividi-lo**: dispensa o crate `futures-util`.
