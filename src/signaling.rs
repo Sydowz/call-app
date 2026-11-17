@@ -1,0 +1,87 @@
+//! WebSocket endpoint: puts each connection in a room and relays its messages.
+
+use axum::{
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, State,
+    },
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio::sync::mpsc;
+
+use crate::rooms::{valid_room_id, Join, Rooms};
+
+/// Large enough for any SDP offer/answer, small enough to bound memory.
+const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+
+/// The only message a client sends: "deliver `data` to participant `to`".
+/// `data` (offer, answer, ICE candidate, sharing on/off) is relayed untouched.
+#[derive(Deserialize)]
+struct ClientMsg {
+    to: u32,
+    data: Value,
+}
+
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Path(room_id): Path<String>,
+    State(rooms): State<Rooms>,
+) -> Response {
+    if !valid_room_id(&room_id) {
+        return (StatusCode::BAD_REQUEST, "ID de sala inválido").into_response();
+    }
+    ws.max_message_size(MAX_MESSAGE_SIZE)
+        .on_upgrade(move |socket| handle_socket(socket, room_id, rooms))
+}
+
+async fn handle_socket(mut socket: WebSocket, room_id: String, rooms: Rooms) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    match rooms.join(&room_id, tx) {
+        Join::Full => {
+            // Best effort: the browser may already be gone.
+            let _ = socket.send(text(&json!({ "type": "full" }))).await;
+            let _ = socket.send(Message::Close(None)).await;
+        }
+        Join::Joined { id, others } => {
+            // An error only means the connection dropped; either way we leave.
+            let _ = run(&mut socket, &rooms, &room_id, id, &others, rx).await;
+            rooms.leave(&room_id, id);
+        }
+    }
+}
+
+async fn run(
+    socket: &mut WebSocket,
+    rooms: &Rooms,
+    room_id: &str,
+    id: u32,
+    others: &[u32],
+    mut rx: mpsc::UnboundedReceiver<String>,
+) -> Result<(), axum::Error> {
+    let welcome = json!({ "type": "welcome", "id": id, "peers": others });
+    socket.send(text(&welcome)).await?;
+
+    loop {
+        tokio::select! {
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Text(msg))) => {
+                    // Malformed messages are ignored rather than closing the socket.
+                    if let Ok(msg) = serde_json::from_str::<ClientMsg>(msg.as_str()) {
+                        rooms.relay(room_id, id, msg.to, msg.data);
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => return Ok(()),
+                Some(Err(err)) => return Err(err),
+                Some(Ok(_)) => {} // binary/ping/pong
+            },
+            Some(msg) = rx.recv() => socket.send(Message::Text(msg.into())).await?,
+        }
+    }
+}
+
+fn text(value: &Value) -> Message {
+    Message::Text(value.to_string().into())
+}

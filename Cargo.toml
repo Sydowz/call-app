@@ -11,3 +11,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"]
 
 [profile.release]
 strip = true
+
+# Only used by `cargo test` (not compiled into the server binary).
+[dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio = { version = "1", features = ["io-util"] }
+tokio-tungstenite = "0.29"
