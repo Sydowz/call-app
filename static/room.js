@@ -3,6 +3,7 @@
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 const MAX_PEERS = 6;
 const AVATAR_COLORS = ['#2E3A5C', '#5C3B3B', '#3B5C47', '#4A3B5C', '#5C4F3B', '#3B525C'];
+const MAX_PHOTO = 40_000; // photos travel inside signaling messages (64 KB limit on the server)
 const roomId = location.pathname.split('/').pop();
 const canShare = !!navigator.mediaDevices?.getDisplayMedia;
 
@@ -11,7 +12,9 @@ const shareBtn = $('share');
 
 let ws = null; // set once we join; null means "not in the room yet"
 let myId = null;
-let myNick = loadNick();
+let myNick = load('nick');
+let myPhoto = validPhoto(load('photo'));
+let draftPhoto = ''; // photo being edited in the profile dialog
 let localTrack = null; // our screen's video track while sharing
 let roomFull = false;
 let left = false;
@@ -23,12 +26,44 @@ const localScreen = buildScreen();
 
 // ---------- perfil (nick) ----------
 
-function loadNick() {
-  try { return localStorage.getItem('nick') || ''; } catch { return ''; }
+function load(key) {
+  try { return localStorage.getItem(key) || ''; } catch { return ''; }
 }
 
-function saveNick(nick) {
-  try { localStorage.setItem('nick', nick); } catch { /* private mode: keep it in memory */ }
+function save(key, value) {
+  try {
+    if (value) localStorage.setItem(key, value); else localStorage.removeItem(key);
+  } catch { /* private mode: keep it in memory */ }
+}
+
+// Only inline images are accepted: a remote URL would let a participant
+// track everyone else's IP when their browser fetches it.
+function validPhoto(value) {
+  return typeof value === 'string' && value.length <= MAX_PHOTO &&
+    /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(value) ? value : '';
+}
+
+// Center-crops and shrinks the picked image to a small JPEG data URL.
+async function photoFromFile(file) {
+  const bitmap = await createImageBitmap(file);
+  const size = 128;
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1F2230'; // JPEG has no transparency
+  ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
+  bitmap.close();
+  for (const quality of [0.85, 0.7, 0.5]) {
+    const url = canvas.toDataURL('image/jpeg', quality);
+    if (url.length <= MAX_PHOTO) return url;
+  }
+  throw new Error('foto grande demais');
+}
+
+function profileMsg() {
+  return { nick: myNick, photo: myPhoto };
 }
 
 function cleanNick(value) {
@@ -47,9 +82,11 @@ function initials(name) {
   return chars.join('').toUpperCase();
 }
 
-function paintAvatar(el, name, id) {
-  el.textContent = initials(name || '?');
-  el.style.background = AVATAR_COLORS[((id ?? 1) - 1) % AVATAR_COLORS.length];
+function paintAvatar(el, name, id, photo) {
+  el.textContent = photo ? '' : initials(name || '?');
+  el.style.backgroundColor = AVATAR_COLORS[((id ?? 1) - 1) % AVATAR_COLORS.length];
+  // Safe inside url(""): validPhoto() only lets base64 characters through.
+  el.style.backgroundImage = photo ? `url("${photo}")` : '';
 }
 
 const profile = $('profile');
@@ -59,15 +96,34 @@ function openProfile() {
   $('profile-title').textContent = ws ? 'Editar perfil' : 'Como seus amigos vão te ver?';
   $('profile-submit').textContent = ws ? 'Salvar' : 'Entrar na sala';
   nickInput.value = myNick;
+  draftPhoto = myPhoto;
   updatePreview();
   profile.showModal();
 }
 
 function updatePreview() {
-  paintAvatar($('preview-avatar'), cleanNick(nickInput.value), myId);
+  paintAvatar($('preview-avatar'), cleanNick(nickInput.value), myId, draftPhoto);
+  $('photo-remove').hidden = !draftPhoto;
+  $('photo-pick').textContent = draftPhoto ? 'Trocar foto' : 'Adicionar foto';
 }
 
 nickInput.oninput = updatePreview;
+$('photo-pick').onclick = () => $('photo-input').click();
+$('photo-remove').onclick = () => {
+  draftPhoto = '';
+  updatePreview();
+};
+$('photo-input').onchange = async () => {
+  const file = $('photo-input').files[0];
+  $('photo-input').value = ''; // picking the same file again still fires onchange
+  if (!file) return;
+  try {
+    draftPhoto = await photoFromFile(file);
+    updatePreview();
+  } catch {
+    toast('Não deu para usar essa imagem');
+  }
+};
 profile.oncancel = (e) => {
   if (!ws) e.preventDefault(); // a nick is required before joining
 };
@@ -76,10 +132,12 @@ $('profile-form').onsubmit = (e) => {
   const nick = cleanNick(nickInput.value);
   if (!nick) return;
   myNick = nick;
-  saveNick(nick);
+  myPhoto = draftPhoto;
+  save('nick', myNick);
+  save('photo', myPhoto);
   profile.close();
   if (ws) {
-    peers.forEach((peer) => send(peer.id, { nick }));
+    peers.forEach((peer) => send(peer.id, profileMsg()));
     refresh();
   } else {
     join();
@@ -149,7 +207,7 @@ function enqueue(peer, step) {
 function createPeer(id, initiator) {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const peer = {
-    id, nick: '', pc, transceiver: null,
+    id, nick: '', photo: '', pc, transceiver: null,
     sharing: false, iWatch: false, watchesMe: false,
     queue: Promise.resolve(),
     screen: buildScreen(),
@@ -175,7 +233,7 @@ function createPeer(id, initiator) {
     });
   }
 
-  send(id, { nick: myNick });
+  send(id, profileMsg());
   if (localTrack) send(id, { sharing: true });
   refresh();
   return peer;
@@ -215,6 +273,7 @@ async function handleSignal(peer, data) {
     refresh();
   } else if ('nick' in data) {
     peer.nick = cleanNick(data.nick);
+    peer.photo = validPhoto(data.photo);
     refresh();
   }
 }
@@ -372,7 +431,7 @@ function personRow(person) {
   const li = el('li', 'row');
   const avatar = el('div', 'avatar');
   avatar.setAttribute('aria-hidden', 'true');
-  paintAvatar(avatar, person.name, person.id);
+  paintAvatar(avatar, person.name, person.id, person.photo);
   const name = el('span', 'ellipsis', person.name);
   if (person.self) name.append(el('span', 'muted', ' (você)'));
   li.append(avatar, name, el('span', `end ${person.status[1]}`, person.status[0]));
@@ -383,7 +442,7 @@ function personTile(person) {
   const tile = el('div', person.self ? 'tile card self' : 'tile card');
   const avatar = el('div', 'avatar');
   avatar.setAttribute('aria-hidden', 'true');
-  paintAvatar(avatar, person.name, person.id);
+  paintAvatar(avatar, person.name, person.id, person.photo);
   const name = el('strong', 'ellipsis', person.name);
   const status = person.self ? ['você', 'online'] : person.status;
   tile.append(avatar, name, el('span', `status ${status[1]}`, status[0]));
@@ -405,10 +464,11 @@ function showScreen(screen, { visible, watching, label, hint, waitingText = '', 
 function refresh() {
   const list = [...peers.values()].sort((a, b) => a.id - b.id);
   const me = {
-    self: true, id: myId, name: myNick,
+    self: true, id: myId, name: myNick, photo: myPhoto,
     status: localTrack ? ['compartilhando', 'live'] : ['na sala', 'online'],
   };
-  const people = myId === null ? [] : [me, ...list.map((p) => ({ id: p.id, name: displayName(p), status: peerStatus(p) }))];
+  const others = list.map((p) => ({ id: p.id, name: displayName(p), photo: p.photo, status: peerStatus(p) }));
+  const people = myId === null ? [] : [me, ...others];
 
   $('online').textContent = people.length ? `● ${people.length}/${MAX_PEERS} online` : '';
   $('people').replaceChildren(...people.map(personRow));
@@ -437,7 +497,7 @@ function refresh() {
   $('screens').style.setProperty('--cols', shown > 2 ? 2 : 1);
   $('live').hidden = shown === 0;
 
-  paintAvatar($('me-avatar'), myNick, myId);
+  paintAvatar($('me-avatar'), myNick, myId, myPhoto);
   $('me-nick').textContent = myNick;
   $('me-status').textContent = me.status[0] === 'na sala' ? 'Na sala' : 'Compartilhando';
   $('me-status').className = me.status[1];

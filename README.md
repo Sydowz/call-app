@@ -4,7 +4,7 @@ Compartilhamento de tela entre amigos. Você abre o link, manda para a galera e 
 
 - Servidor em Rust (axum + tokio) que só retransmite a sinalização WebRTC por WebSocket.
 - O vídeo vai direto de navegador para navegador (P2P, mesh), com STUN público do Google.
-- Cada pessoa escolhe um nick ao entrar. Ele fica salvo só no navegador e vai para os outros pelo canal de sinalização; o servidor não o registra.
+- Cada pessoa escolhe um nick e, se quiser, uma foto (reduzida para 128×128 no próprio navegador). Os dois ficam salvos só no navegador e vão para os outros pelo canal de sinalização; o servidor não registra nada.
 - Até 6 pessoas por sala. As salas ficam só na memória e somem quando a última pessoa sai.
 
 ## Rodar
