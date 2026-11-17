@@ -227,29 +227,53 @@ function colorFor(id) {
 
 // ---------- sala fixa ----------
 
-// Your fixed room: created once, kept in this browser, and always one click
-// away (like a Discord group). It is a normal room with a stable, unguessable
-// ID; the server knows nothing about it. Without storage (private mode) it
-// lasts until the page is closed.
+// Your fixed room: created once in the lobby (after you pick a nick), kept in
+// this browser and always one click away (like a Discord group). It is a
+// normal room with a stable, unguessable ID named after you
+// ("sala-de-lucas-x7k2p9"), so invited friends see whose room it is; the
+// server knows nothing about it. Without storage (private mode) it lasts until
+// the page is closed. Only reading never creates it: opening an invite
+// shouldn't leave a room behind in a friend's browser.
 let homeFallback = '';
 function homeRoomId() {
   const saved = load('home-room');
-  if (validRoomId(saved)) return saved;
-  const id = homeFallback || newRoomId('');
+  return validRoomId(saved) ? saved : homeFallback;
+}
+
+function ensureHomeRoom(nick) {
+  const existing = homeRoomId();
+  if (existing) return existing;
+  const slug = slugify(nick);
+  const id = newRoomId(slug ? `sala-de-${slug}` : 'minha-sala');
   homeFallback = id;
   save('home-room', id);
   return id;
 }
 
-function displayRoomName(id) {
-  return id === homeRoomId() ? 'Sala fixa' : roomName(id);
+function isHomeRoom(id) {
+  return !!id && id === homeRoomId();
 }
 
-// Fixed room first, then pinned ones, then the rest by most recent.
+function displayRoomName(id) {
+  return isHomeRoom(id) ? 'Sala fixa' : roomName(id);
+}
+
+// Fixed room first (when there is one), then pinned ones, then the rest by most recent.
 function orderedRooms() {
   const home = homeRoomId();
   const rest = loadRooms()
     .filter((r) => r.id !== home)
     .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.at - a.at);
-  return [{ id: home, at: 0, pinned: true, home: true }, ...rest];
+  return home ? [{ id: home, at: 0, pinned: true, home: true }, ...rest] : rest;
+}
+
+// How many people are in each room now (server's /api/rooms); null if offline.
+async function fetchRoomCounts(ids) {
+  if (!ids.length) return null;
+  try {
+    const res = await fetch(`/api/rooms?ids=${ids.join(',')}`, { cache: 'no-store' });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
 }
