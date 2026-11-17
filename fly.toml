@@ -1,6 +1,6 @@
 # Fly.io: https://fly.io/docs/reference/configuration/
-# Troque o nome do app (precisa ser único no Fly.io) antes do primeiro deploy.
-app = "friends-call"
+# Nome do app no Fly.io (endereço: https://cpx-call.fly.dev).
+app = "cpx-call"
 primary_region = "gru" # São Paulo
 
 [build]
