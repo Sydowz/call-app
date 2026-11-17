@@ -50,6 +50,8 @@ fn app(rooms: Rooms) -> Router {
         .route("/room/{id}", get(room_page))
         .route("/room.js", get(room_js))
         .route("/ws/{id}", get(signaling::ws_handler))
+        // For the hosting platform's health checks.
+        .route("/health", get(|| async { "ok" }))
         .with_state(rooms)
 }
 
@@ -134,6 +136,8 @@ mod tests {
         assert!(get("/room.js")
             .await
             .contains("content-type: text/javascript"));
+        let health = get("/health").await;
+        assert!(health.starts_with("HTTP/1.1 200") && health.ends_with("ok"));
     }
 
     #[tokio::test]

@@ -27,6 +27,18 @@ Abra http://localhost:3000. Você cai numa sala nova (`/room/<id>`). É só copi
 - Túnel HTTPS (mais fácil, funciona também pela internet): `cloudflared tunnel --url http://localhost:3000` (ou ngrok). Use o link `https://…` que ele mostrar.
 - Só para teste na rede local, no Chrome: em `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, adicione `http://<IP>:3000` e reinicie o navegador.
 
+## Colocar no ar (Fly.io)
+
+O projeto já vem com `Dockerfile` e `fly.toml` (região São Paulo, uma máquina sempre ligada, porque as salas ficam em memória). O Fly.io dá um endereço `https://<nome>.fly.dev` com HTTPS, então não precisa de domínio para começar.
+
+```sh
+fly auth signup                      # ou: fly auth login
+fly apps create <nome-unico>         # e troque `app = "..."` no fly.toml por esse nome
+fly deploy
+```
+
+Depois é só abrir `https://<nome-unico>.fly.dev`. Para mudar o limite de pessoas: `fly secrets set MAX_PEERS=20` (ou edite `[env]` no `fly.toml`). Logs: `fly logs`.
+
 ## Desenvolvimento
 
 ```sh
