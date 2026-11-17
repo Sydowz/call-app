@@ -1,10 +1,11 @@
 # call-app
 
-Compartilhamento de tela entre amigos. Você abre o link, manda para a galera e cada um pode compartilhar a própria tela. Não tem câmera, chat nem conta.
+Compartilhamento de tela entre amigos. Você abre o link, manda para a galera e cada um pode compartilhar a própria tela, com um chat de texto da sala. Não tem câmera nem conta.
 
 - Servidor em Rust (axum + tokio) que só retransmite a sinalização WebRTC por WebSocket.
 - O vídeo vai direto de navegador para navegador (P2P, mesh), com STUN público do Google.
 - Cada pessoa escolhe um nick e, se quiser, uma foto (reduzida para 128×128 no próprio navegador). Os dois ficam salvos só no navegador e vão para os outros pelo canal de sinalização; o servidor não registra nada.
+- Chat da sala pelo mesmo WebSocket da sinalização, para funcionar mesmo quando a conexão direta de vídeo falha. O servidor só repassa as mensagens: não grava nem registra nada, e quem entra depois não vê as anteriores.
 - Até 6 pessoas por sala. As salas ficam só na memória e somem quando a última pessoa sai.
 
 ## Rodar
