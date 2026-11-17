@@ -1,6 +1,24 @@
 'use strict';
 
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+// STUN until /api/ice answers; with a TURN key the server adds Cloudflare TURN,
+// which relays the video when a network blocks direct connections.
+let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+let iceLoadedAt = 0;
+const ICE_REFRESH_MS = 6 * 60 * 60_000; // credentials last a day; refresh well before
+
+async function loadIceServers() {
+  if (Date.now() - iceLoadedAt < ICE_REFRESH_MS) return;
+  try {
+    const res = await fetch('/api/ice', { cache: 'no-store' });
+    const data = res.ok ? await res.json() : null;
+    if (Array.isArray(data?.iceServers) && data.iceServers.length) {
+      iceServers = data.iceServers;
+      iceLoadedAt = Date.now();
+    }
+  } catch {
+    // Keep STUN: direct connections still work for most networks.
+  }
+}
 const roomId = location.pathname.split('/').pop();
 const canShare = !!navigator.mediaDevices?.getDisplayMedia;
 
@@ -103,7 +121,7 @@ let reconnecting = false;
 let reconnectTimer = null;
 
 async function join() {
-  hwH264 = await hwH264Ready; // must be in the first profile we send
+  [hwH264] = await Promise.all([hwH264Ready, loadIceServers()]); // both needed before any peer
   const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`);
   ws = socket;
   ws.onmessage = onMessage;
@@ -193,7 +211,7 @@ function enqueue(peer, step) {
 // ---------- WebRTC ----------
 
 function createPeer(id, initiator) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const pc = new RTCPeerConnection({ iceServers });
   const peer = {
     id, nick: '', photo: '', pc, transceiver: null,
     sharing: false, iWatch: false, watchesMe: false,
