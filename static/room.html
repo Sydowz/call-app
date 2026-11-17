@@ -8,6 +8,7 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <meta name="theme-color" content="#0B0C10">
   <link rel="stylesheet" href="/common.css">
+  <script src="/theme.js"></script>
   <style>
 
     /* ---------- layout ---------- */
@@ -88,12 +89,11 @@
     .voice-icon { display: inline-flex; margin-left: 6px; vertical-align: -2px; color: var(--muted); }
     .voice-icon.off { color: var(--danger); }
     .voice-icon svg { width: 14px; height: 14px; }
-    svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 10px; background: var(--raised); color: var(--text); }
     .icon-btn svg, .icon-btn-lg svg { width: 18px; height: 18px; }
     .icon-btn-lg { width: 44px; padding: 0; }
-    #notify-btn[aria-pressed="true"] { background: var(--live-bg); color: #6FD39B; } /* on is good, not the red "pressed" look */
-    .icon-btn.talking,.icon-btn-lg.talking { background: var(--live-bg); color: #6FD39B; box-shadow: 0 0 0 2px #6FD39B; } /* push-to-talk held */
+    #notify-btn[aria-pressed="true"] { background: rgb(59 217 138 / .14); color: var(--online); } /* on is good, not the red "pressed" look */
+    .ptt-note { font-size: 12px; }
+    .icon-btn.talking, .icon-btn-lg.talking { background: rgb(59 217 138 / .18); color: var(--online); box-shadow: 0 0 0 2px var(--online); } /* push-to-talk held */
     .icon-btn[aria-pressed="true"], .icon-btn-lg[aria-pressed="true"] { background: var(--danger-bg); color: var(--danger); }
     .voice-join { background: rgb(59 217 138 / .14); color: var(--online); font-weight: 600; }
     .voice-leave { background: var(--danger-bg); color: var(--danger); font-weight: 600; }
@@ -259,7 +259,7 @@
       </div>
       <label class="switch-row">Supressão de ruído<input type="checkbox" role="switch" id="vs-ns"></label>
       <label class="switch-row">Apertar para falar<input type="checkbox" role="switch" id="vs-ptt"></label>
-      <div class="field" id="vs-ptt-row" hidden><span class="muted">Tecla para falar</span><button type="button" class="btn small" id="vs-ptt-key"></button></div>
+      <div class="field" id="vs-ptt-row" hidden><span class="muted">Tecla para falar</span><button type="button" class="btn small" id="vs-ptt-key"></button><span class="muted ptt-note">Funciona com esta aba em foco. Jogos em primeiro plano não repassam teclas ao navegador.</span></div>
       <label class="field"><span class="muted">Volume das vozes</span><input type="range" id="vs-volume" min="0" max="1" step="0.05"></label>
       <button class="btn small primary">Pronto</button>
     </form>
