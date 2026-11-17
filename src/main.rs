@@ -6,7 +6,7 @@ mod signaling;
 use std::error::Error;
 
 use axum::{
-    extract::Path,
+    extract::{Path, RawQuery, State},
     http::header,
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
@@ -20,6 +20,12 @@ const DEFAULT_PORT: u16 = 3000;
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const ROOM_HTML: &str = include_str!("../static/room.html");
 const ROOM_JS: &str = include_str!("../static/room.js");
+const LOBBY_JS: &str = include_str!("../static/lobby.js");
+const COMMON_JS: &str = include_str!("../static/common.js");
+const COMMON_CSS: &str = include_str!("../static/common.css");
+
+/// Most rooms the lobby may ask about in one request.
+const MAX_COUNT_IDS: usize = 30;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -48,7 +54,19 @@ fn app(rooms: Rooms) -> Router {
     Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/room/{id}", get(room_page))
-        .route("/room.js", get(room_js))
+        .route("/room.js", get(|| async { javascript(ROOM_JS) }))
+        .route("/lobby.js", get(|| async { javascript(LOBBY_JS) }))
+        .route("/common.js", get(|| async { javascript(COMMON_JS) }))
+        .route(
+            "/common.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                    COMMON_CSS,
+                )
+            }),
+        )
+        .route("/api/rooms", get(room_counts))
         .route("/ws/{id}", get(signaling::ws_handler))
         // For the hosting platform's health checks.
         .route("/health", get(|| async { "ok" }))
@@ -63,11 +81,37 @@ async fn room_page(Path(id): Path<String>) -> Response {
     }
 }
 
-async fn room_js() -> impl IntoResponse {
+fn javascript(source: &'static str) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        ROOM_JS,
+        source,
     )
+}
+
+/// `GET /api/rooms?ids=a,b,c` -> `{"a":3,"b":0,"c":0}`: how many people are in
+/// each room the browser already knows. Only counts; no names, no listing.
+async fn room_counts(State(rooms): State<Rooms>, RawQuery(query): RawQuery) -> Response {
+    let query = query.unwrap_or_default();
+    let ids: Vec<&str> = query
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("ids="))
+        .flat_map(|list| list.split(','))
+        .filter(|id| valid_room_id(id))
+        .take(MAX_COUNT_IDS)
+        .collect();
+    let counts: serde_json::Map<String, serde_json::Value> = rooms
+        .counts(&ids)
+        .into_iter()
+        .map(|(id, count)| (id.to_owned(), count.into()))
+        .collect();
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        serde_json::Value::Object(counts).to_string(),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -136,6 +180,9 @@ mod tests {
         assert!(get("/room.js")
             .await
             .contains("content-type: text/javascript"));
+        assert!(get("/common.js").await.contains("text/javascript"));
+        assert!(get("/lobby.js").await.contains("text/javascript"));
+        assert!(get("/common.css").await.contains("content-type: text/css"));
         let health = get("/health").await;
         assert!(health.starts_with("HTTP/1.1 200") && health.ends_with("ok"));
     }
@@ -173,6 +220,28 @@ mod tests {
 
         b.close(None).await.unwrap();
         assert_eq!(recv(&mut a).await, json!({ "type": "peer-left", "id": 2 }));
+    }
+
+    #[tokio::test]
+    async fn room_counts_endpoint() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = start_server().await;
+        let mut ws = connect(&addr, "countme").await;
+        recv(&mut ws).await; // welcome: we are in
+
+        let mut stream = TcpStream::connect(&addr).await.unwrap();
+        let request = "GET /api/rooms?ids=countme,empty,bad!id HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+
+        assert!(response.contains("content-type: application/json"));
+        assert!(response.contains("cache-control: no-store"));
+        let body = response.split("\r\n\r\n").nth(1).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(body).unwrap(),
+            json!({ "countme": 1, "empty": 0 })
+        );
     }
 
     #[tokio::test]

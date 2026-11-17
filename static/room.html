@@ -4,54 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Friends Call</title>
+  <link rel="stylesheet" href="/common.css">
   <style>
-    :root {
-      --bg: #0B0C10;
-      --card: #13151C;
-      --raised: #1F2230;
-      --frame: #1A1D27;
-      --border: #232734;
-      --border-strong: #2A2E3D;
-      --text: #E8EAF2;
-      --muted: #8A90A6;
-      --faint: #5A6078;
-      --accent: #7C5CFF;
-      --online: #3BD98A;
-      --live: #F58C8C;
-      --live-bg: #3A1F25;
-      --warn: #F2B267;
-      --danger: #FF8A95;
-      --danger-bg: #4A1F27;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 Inter, system-ui, sans-serif; }
-    button, input { font: inherit; color: inherit; }
-    button { border: 0; cursor: pointer; }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    [hidden] { display: none !important; }
-
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; }
-    .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-    .muted { color: var(--muted); }
-    .online { color: var(--online); }
-    .live { color: var(--live); }
-    .warn { color: var(--warn); }
-    .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .end { margin-left: auto; font-size: 12px; white-space: nowrap; }
-    .avatar { flex: none; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; background: #2E3A5C center / cover no-repeat; user-select: none; }
-    .pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--raised); white-space: nowrap; }
-    .btn { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 18px; border-radius: 12px; background: var(--raised); color: var(--text); text-decoration: none; white-space: nowrap; }
-    .btn.small { height: 36px; border-radius: 10px; font-weight: 600; }
-    .btn.primary { background: var(--accent); color: #fff; font-weight: 600; }
-    .btn.danger { background: var(--danger-bg); color: var(--danger); font-weight: 600; }
-    .short { display: none; }
 
     /* ---------- layout ---------- */
     .app { height: 100vh; height: 100dvh; padding: 12px; display: flex; gap: 12px; }
 
-    .logo { flex: none; width: 32px; height: 32px; border-radius: 10px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; user-select: none; }
 
     .side { width: 280px; flex: none; display: flex; flex-direction: column; gap: 12px; }
     .room { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
@@ -121,32 +79,10 @@
     .mode-btn { padding: 0 14px; border-radius: 9px; background: transparent; color: var(--muted); }
     .mode-btn[aria-pressed="true"] { background: var(--card); color: var(--text); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
 
-    /* ---------- dialogs ---------- */
-    dialog { width: min(360px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 20px; background: var(--card); color: var(--text); overflow: hidden; }
-    dialog:focus-visible { outline: none; }
-    dialog::backdrop { background: rgb(11 12 16 / .85); }
-    .banner { height: 72px; background: var(--raised); }
-    .dialog-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-    .banner + .dialog-body { padding-top: 0; }
-    .avatar-row { margin-top: -36px; display: flex; align-items: flex-end; gap: 8px; }
-    .avatar-row .avatar { margin-right: auto; }
-    .avatar.big { width: 76px; height: 76px; font-size: 24px; font-weight: 700; border: 4px solid var(--card); }
-    dialog h2 { margin: 0; font-size: 20px; font-weight: 700; }
-    dialog p { margin: 0; }
-    .heading { display: flex; flex-direction: column; gap: 2px; }
-    .heading span { font-size: 13px; }
-    .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
-    .field input { height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--raised); font-size: 14px; }
-    .actions { display: flex; gap: 8px; }
-    .actions .btn { flex: 1; }
-
-    .toast { position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; background: var(--raised); border: 1px solid var(--border-strong); font-size: 13px; }
 
     /* ---------- mobile ---------- */
     @media (max-width: 760px) {
       .side, .screen-foot .hint, .tile .status, .mode, .pip-btn { display: none; }
-      .long { display: none; }
-      .short { display: inline; }
       .topbar { height: 52px; padding: 0 14px; gap: 10px; }
       .topbar h2 { font-size: 15px; }
       .topbar .pill { font-size: 11px; padding: 3px 8px; }
@@ -164,7 +100,6 @@
       body.chat-open .side .room, body.chat-open .side .me { display: none; }
       #chat-close { display: inline-flex; }
       .controls .btn { height: 100%; padding: 0 8px; font-size: 13px; }
-      .toast { bottom: 112px; }
     }
   </style>
 </head>
@@ -178,7 +113,7 @@
         </div>
         <h1 id="room-title"></h1>
         <ul id="people" aria-label="Quem está na sala"></ul>
-        <button class="btn small" id="copy-side">Copiar convite</button>
+        <button class="btn small" id="invite-side">Convidar</button>
       </section>
 
       <section class="chat card" aria-labelledby="chat-title">
@@ -205,7 +140,7 @@
 
     <main class="stage">
       <header class="topbar card">
-        <div class="logo" aria-hidden="true">FC</div>
+        <a class="logo" href="/" id="home" title="Voltar ao início" aria-label="Voltar ao início">FC</a>
         <h2 id="room-tag"></h2>
         <span class="muted" id="timer">00:00:00</span>
         <span class="topbar-end">
@@ -234,35 +169,12 @@
           <button class="mode-btn" id="mode-jogo" aria-pressed="true" title="Fluido e leve para o PC: até 720p a 30 FPS">Jogo</button>
           <button class="mode-btn" id="mode-texto" aria-pressed="false" title="Nítido para código e documentos: até 1080p a 15 FPS">Texto</button>
         </div>
-        <button class="btn" id="copy"><span class="long">Copiar link</span><span class="short">Link</span></button>
+        <button class="btn" id="invite">Convidar</button>
         <button class="btn" id="chat-toggle">Chat<span class="badge" id="chat-badge" hidden></span></button>
         <button class="btn danger" id="leave">Sair</button>
       </footer>
     </main>
   </div>
-
-  <dialog id="profile" aria-labelledby="profile-title">
-    <form id="profile-form">
-      <div class="banner"></div>
-      <div class="dialog-body">
-        <div class="avatar-row">
-          <div class="avatar big" id="preview-avatar" aria-hidden="true"></div>
-          <button type="button" class="btn small" id="photo-pick">Alterar foto</button>
-          <button type="button" class="btn small" id="photo-remove">Remover</button>
-          <input type="file" id="photo-input" accept="image/*" hidden>
-        </div>
-        <div class="heading">
-          <h2 id="profile-title">Como seus amigos vão te ver?</h2>
-          <span class="muted">Nick e foto aparecem só para quem está na sala.</span>
-        </div>
-        <label class="field">
-          <span class="muted">Nick</span>
-          <input id="nick-input" maxlength="32" autocomplete="nickname" required>
-        </label>
-        <button class="btn small primary" id="profile-submit">Entrar na sala</button>
-      </div>
-    </form>
-  </dialog>
 
   <dialog id="notice" aria-labelledby="notice-title">
     <div class="dialog-body">
@@ -270,13 +182,12 @@
       <p class="muted" id="notice-text"></p>
       <div class="actions">
         <button class="btn small primary" id="notice-retry">Entrar de novo</button>
-        <a class="btn small" href="/">Nova sala</a>
+        <a class="btn small" href="/">Ir para o início</a>
       </div>
     </div>
   </dialog>
 
-  <div class="toast" id="toast" role="status" hidden></div>
-
+  <script src="/common.js"></script>
   <script src="/room.js"></script>
 </body>
 </html>

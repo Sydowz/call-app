@@ -99,6 +99,14 @@ impl Rooms {
         }
     }
 
+    /// How many people are in each room; rooms that don't exist count 0.
+    pub fn counts<'a>(&self, ids: &[&'a str]) -> Vec<(&'a str, usize)> {
+        let rooms = self.lock();
+        ids.iter()
+            .map(|&id| (id, rooms.get(id).map_or(0, |room| room.peers.len())))
+            .collect()
+    }
+
     /// Delivers `data` from `from` to participant `to` of the same room.
     /// Unknown recipients are ignored.
     pub fn relay(&self, room_id: &str, from: u32, to: u32, data: Value) {
@@ -285,6 +293,18 @@ mod tests {
                 id: 1,
                 others: vec![]
             }
+        );
+    }
+
+    #[test]
+    fn counts_people_per_room() {
+        let rooms = Rooms::default();
+        rooms.join("a", peer().0);
+        rooms.join("a", peer().0);
+        rooms.join("b", peer().0);
+        assert_eq!(
+            rooms.counts(&["a", "b", "nobody"]),
+            vec![("a", 2), ("b", 1), ("nobody", 0)]
         );
     }
 
