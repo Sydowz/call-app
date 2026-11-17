@@ -167,6 +167,7 @@ function onMessage(ev) {
       }
       for (const id of msg.peers) createPeer(id, true);
       rememberRoom(roomId); // shows up in the lobby's "Suas salas"
+      renderHud();
       setChatEnabled(true);
       addSystem(reconnecting ? 'Reconectado.' : 'Você entrou na sala. As mensagens do chat não ficam salvas.');
       reconnecting = false;
@@ -668,13 +669,62 @@ $('home').onclick = (e) => {
   goToLobby();
 };
 
+// ---------- suas salas (barra lateral) ----------
+
+// Same list as the lobby (fixed room first), so you can hop between rooms
+// without going back. The counts come from the server's /api/rooms.
+let hudCounts = {};
+
+function hudItem(room) {
+  const current = room.id === roomId;
+  const link = el('a', 'hud-room');
+  link.href = `/room/${room.id}`;
+  if (current) link.setAttribute('aria-current', 'page');
+  const icon = el('span', 'hud-icon', room.home ? '★' : '#');
+  icon.style.background = colorFor(room.id);
+  icon.setAttribute('aria-hidden', 'true');
+  const count = hudCounts[room.id];
+  const text = el('span', 'hud-count', count > 0 ? `● ${count}` : '');
+  if (count > 0) text.classList.add('online');
+  link.append(icon, el('span', 'hud-name ellipsis', displayRoomName(room.id)), text);
+  const li = el('li');
+  li.append(link);
+  return li;
+}
+
+function renderHud() {
+  $('hud-rooms').replaceChildren(...orderedRooms().map(hudItem));
+}
+
+async function updateHudCounts() {
+  if (document.hidden) return;
+  const ids = orderedRooms().map((r) => r.id);
+  try {
+    const res = await fetch(`/api/rooms?ids=${ids.join(',')}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    hudCounts = await res.json();
+    renderHud();
+  } catch { /* offline: keep the last numbers */ }
+}
+
+$('hud-new').onsubmit = (e) => {
+  e.preventDefault();
+  const id = newRoomId($('hud-new-name').value);
+  location.assign(`/room/${id}`);
+};
+
+renderHud();
+updateHudCounts();
+setInterval(updateHudCounts, 15_000);
+window.addEventListener('storage', renderHud); // changed from another tab
+
 // ---------- convidar ----------
 
 // Phones open the system share sheet (WhatsApp etc.); elsewhere a ready-made
 // message goes to the clipboard.
 async function invite() {
   const url = location.href;
-  const text = `Bora? Entra na sala ${roomName(roomId)} do Friends Call:`;
+  const text = `Bora? Entra na sala ${displayRoomName(roomId)} do Friends Call:`;
   if (navigator.share && mobile.matches) {
     try {
       await navigator.share({ title: 'Friends Call', text, url });
@@ -869,8 +919,8 @@ function refresh() {
 
 // ---------- início ----------
 
-$('room-tag').textContent = `# ${roomName(roomId)}`;
-$('room-title').textContent = `Sala ${roomName(roomId)}`;
+$('room-tag').textContent = `# ${displayRoomName(roomId)}`;
+$('room-title').textContent = roomId === homeRoomId() ? 'Sala fixa' : `Sala ${roomName(roomId)}`;
 if (!canShare) {
   shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';

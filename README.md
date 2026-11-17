@@ -16,7 +16,7 @@ Precisa do Rust ([rustup.rs](https://rustup.rs)).
 cargo run --release
 ```
 
-Abra http://localhost:3000. Você cai no **lobby**: escolha seu nick, crie uma sala (com nome opcional) ou entre com um convite. As salas por onde você passa ficam em "Suas salas", com quantas pessoas estão em cada uma agora. Dentro da sala, "Convidar" copia uma mensagem pronta com o link (no celular, abre o compartilhamento do sistema). Variáveis opcionais: `PORT` (padrão 3000) e `MAX_PEERS` (pessoas por sala, padrão 12), por exemplo `PORT=8080 MAX_PEERS=20 cargo run --release`.
+Abra http://localhost:3000. Você cai no **lobby**: escolha seu nick, crie uma sala (com nome opcional) ou entre com um convite. As salas por onde você passa ficam em "Suas salas", com quantas pessoas estão em cada uma agora. Você também tem uma **sala fixa**: criada na primeira visita e guardada no navegador, ela é sempre a primeira da lista e não some (o link dela nunca muda, então os amigos sempre sabem onde te achar). Dentro de qualquer sala, o painel "Suas salas" na lateral mostra a sala fixa e as salvas, com quem está em cada uma, para trocar de sala ou criar outra sem voltar ao lobby. Tudo isso fica só no navegador; o servidor não guarda nada. Dentro da sala, "Convidar" copia uma mensagem pronta com o link (no celular, abre o compartilhamento do sistema). Variáveis opcionais: `PORT` (padrão 3000) e `MAX_PEERS` (pessoas por sala, padrão 12), por exemplo `PORT=8080 MAX_PEERS=20 cargo run --release`.
 
 ## Testar
 
