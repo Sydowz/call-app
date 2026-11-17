@@ -47,7 +47,7 @@ $('join-form').onsubmit = (e) => {
   e.preventDefault();
   const id = parseRoom($('join-link').value);
   if (id) location.assign(`/room/${id}`);
-  else toast('Esse link não parece um convite do Friends Call.');
+  else toast('Esse link não parece um convite do CPX Call.');
 };
 
 // ---------- suas salas ----------

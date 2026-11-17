@@ -156,12 +156,12 @@ $('profile-form').onsubmit = (e) => {
 };
 
 let toastTimer = null;
-function toast(text) {
+function toast(text, ms = 2500) {
   const node = $('toast');
   node.textContent = text;
   node.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (node.hidden = true), 2500);
+  toastTimer = setTimeout(() => (node.hidden = true), ms);
 }
 
 // ---------- salas ----------
