@@ -192,6 +192,7 @@ function join() {
   ws.onclose = () => {
     if (left) return;
     shareBtn.disabled = true;
+    setChatEnabled(false);
     clearInterval(timer);
     if (roomFull) {
       showNotice('Sala cheia', `Esta sala já tem ${MAX_PEERS} pessoas. Tente de novo mais tarde ou crie outra.`);
@@ -210,15 +211,20 @@ function onMessage(ev) {
       const joinedAt = Date.now();
       timer = setInterval(() => ($('timer').textContent = elapsed(joinedAt)), 1000);
       for (const id of msg.peers) createPeer(id, true);
+      setChatEnabled(true);
+      addSystem('Você entrou na sala. As mensagens do chat não ficam salvas.');
       refresh();
       break;
     }
     case 'peer-joined':
       createPeer(msg.id, false); // the newcomer will send us the offer
       break;
-    case 'peer-left':
+    case 'peer-left': {
+      const peer = peers.get(msg.id);
+      if (peer?.announced) addSystem(`${displayName(peer)} saiu`);
       removePeer(msg.id);
       break;
+    }
     case 'signal': {
       const peer = peers.get(msg.from) ?? createPeer(msg.from, false);
       enqueue(peer, () => handleSignal(peer, msg.data));
@@ -248,6 +254,7 @@ function createPeer(id, initiator) {
   const peer = {
     id, nick: '', photo: '', pc, transceiver: null,
     sharing: false, iWatch: false, watchesMe: false,
+    announced: initiator, // people already here when we joined don't get an "entrou" line
     queue: Promise.resolve(),
     screen: buildScreen(),
   };
@@ -302,9 +309,14 @@ async function handleSignal(peer, data) {
   } else if (data.candidate) {
     await pc.addIceCandidate(data.candidate);
   } else if ('sharing' in data) {
+    const started = !!data.sharing && !peer.sharing;
     peer.sharing = !!data.sharing;
     if (!peer.sharing) peer.iWatch = false; // a new share starts unwatched
+    if (started) addSystem(`${displayName(peer)} começou a compartilhar a tela`);
     refresh();
+  } else if ('chat' in data) {
+    const text = cleanChat(data.chat);
+    if (text) addMessage({ authorId: peer.id, name: displayName(peer), photo: peer.photo, text });
   } else if ('watch' in data) {
     // Ignore a request that crossed with us stopping the share.
     peer.watchesMe = !!data.watch && !!localTrack;
@@ -313,6 +325,10 @@ async function handleSignal(peer, data) {
   } else if ('nick' in data) {
     peer.nick = cleanNick(data.nick);
     peer.photo = validPhoto(data.photo);
+    if (!peer.announced) {
+      peer.announced = true; // wait for the nick so the line has a name
+      addSystem(`${displayName(peer)} entrou`);
+    }
     refresh();
   }
 }
@@ -382,9 +398,119 @@ function leaveRoom(title, text, action) {
   clearInterval(timer);
   [...peers.keys()].forEach(removePeer);
   shareBtn.disabled = true;
+  setChatEnabled(false);
   releaseLock?.();
   showNotice(title, text, action);
 }
+
+// ---------- chat ----------
+
+// Chat goes through the signaling WebSocket (one copy per participant), so it
+// works even when the direct video connection fails. Nothing is stored.
+const MAX_CHAT = 500;
+const GROUP_MS = 5 * 60_000; // consecutive messages from the same person share a header
+const messagesEl = $('messages');
+const chatInput = $('chat-input');
+const mobile = matchMedia('(max-width: 760px)');
+let lastAuthor = null;
+let lastAt = 0;
+let unread = 0;
+
+function cleanChat(value) {
+  return typeof value === 'string' ? Array.from(value.trim()).slice(0, MAX_CHAT).join('') : '';
+}
+
+function setChatEnabled(on) {
+  chatInput.disabled = !on;
+  $('chat-send').disabled = !on;
+}
+
+function chatVisible() {
+  return !document.hidden && (!mobile.matches || document.body.classList.contains('chat-open'));
+}
+
+function updateUnread() {
+  if (chatVisible()) unread = 0;
+  $('chat-badge').hidden = unread === 0;
+  $('chat-badge').textContent = String(unread);
+  document.title = unread ? `(${unread}) Friends Call` : 'Friends Call';
+}
+
+// Builds text with http(s) links as anchors, never as HTML.
+function linkify(text) {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"]+/g)) {
+    frag.append(text.slice(last, match.index));
+    const a = el('a', null, match[0]);
+    a.href = match[0];
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    frag.append(a);
+    last = match.index + match[0].length;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+
+function appendToChat(item) {
+  const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 60;
+  messagesEl.append(item);
+  if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function addMessage({ authorId, name, photo, text, self = false }) {
+  const now = Date.now();
+  const grouped = authorId === lastAuthor && now - lastAt < GROUP_MS;
+  lastAuthor = authorId;
+  lastAt = now;
+
+  const li = el('li', grouped ? 'msg grouped' : 'msg');
+  if (!grouped) {
+    const head = el('div', 'msg-head');
+    const avatar = el('div', 'avatar');
+    avatar.setAttribute('aria-hidden', 'true');
+    paintAvatar(avatar, name, authorId, photo);
+    const time = el('time', null, new Date(now).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+    head.append(avatar, el('strong', 'ellipsis', self ? `${name} (você)` : name), time);
+    li.append(head);
+  }
+  const body = el('p', 'msg-text');
+  body.append(linkify(text));
+  li.append(body);
+  appendToChat(li);
+
+  if (!self) {
+    unread += 1;
+    updateUnread();
+  }
+}
+
+function addSystem(text) {
+  lastAuthor = null; // the next message starts a new group
+  appendToChat(el('li', 'system', text));
+}
+
+$('chat-form').onsubmit = (e) => {
+  e.preventDefault();
+  const text = cleanChat(chatInput.value);
+  if (!text || chatInput.disabled) return;
+  peers.forEach((peer) => send(peer.id, { chat: text }));
+  addMessage({ authorId: myId, name: myNick, photo: myPhoto, text, self: true });
+  chatInput.value = '';
+  messagesEl.scrollTop = messagesEl.scrollHeight; // always follow your own message
+};
+
+$('chat-toggle').onclick = () => {
+  document.body.classList.add('chat-open');
+  updateUnread();
+  chatInput.focus();
+};
+$('chat-close').onclick = () => {
+  document.body.classList.remove('chat-open');
+};
+document.addEventListener('visibilitychange', updateUnread);
+mobile.addEventListener('change', updateUnread);
 
 $('leave').onclick = () => leaveRoom('Você saiu da sala', 'O link continua valendo enquanto houver alguém na sala.');
 

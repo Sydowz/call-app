@@ -57,6 +57,22 @@
     .room { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
     .room h1 { margin: 0; font-size: 16px; font-weight: 600; }
     #people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .chat { flex: 1; min-height: 0; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    #chat-close { display: none; }
+    #messages { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 4px 0 0; display: flex; flex-direction: column; }
+    .msg { padding-top: 10px; }
+    .msg.grouped { padding-top: 2px; }
+    .msg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; min-width: 0; }
+    .msg-head .avatar { width: 24px; height: 24px; font-size: 10px; }
+    .msg-head strong { font-size: 13px; font-weight: 600; }
+    .msg-head time { flex: none; font-size: 11px; color: var(--muted); }
+    .msg-text { margin: 0; padding-left: 32px; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .msg-text a { color: #B3A6FF; }
+    .system { padding: 8px 0 2px; font-size: 12px; color: var(--muted); text-align: center; }
+    .chat-form { display: flex; gap: 8px; }
+    .chat-form input { flex: 1; min-width: 0; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--raised); }
+    .badge { min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--live); color: var(--bg); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+    #chat-toggle { display: none; }
     .me { margin-top: auto; padding: 12px; }
     .me .avatar { width: 40px; height: 40px; font-size: 13px; }
     .me-text { display: flex; flex-direction: column; min-width: 0; }
@@ -126,7 +142,12 @@
       .tile { flex: 1 0 96px; min-height: 0; height: 96px; gap: 4px; }
       .tile .avatar { width: 40px; height: 40px; font-size: 13px; }
       .tile strong { font-size: 12px; font-weight: 400; }
-      .controls { height: 88px; padding: 12px; border-radius: 20px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .controls { height: 88px; padding: 12px; border-radius: 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+      #chat-toggle { display: inline-flex; }
+      /* Mobile: the chat opens full screen over the call. */
+      body.chat-open .side { display: flex; position: fixed; inset: 0; z-index: 5; width: auto; padding: 12px; background: var(--bg); }
+      body.chat-open .side .room, body.chat-open .side .me { display: none; }
+      #chat-close { display: inline-flex; }
       .controls .btn { height: 100%; padding: 0 8px; font-size: 13px; }
       .toast { bottom: 112px; }
     }
@@ -143,6 +164,18 @@
         <h1 id="room-title"></h1>
         <ul id="people" aria-label="Quem está na sala"></ul>
         <button class="btn small" id="copy-side">Copiar convite</button>
+      </section>
+
+      <section class="chat card" aria-labelledby="chat-title">
+        <div class="row">
+          <span class="eyebrow" id="chat-title">Chat</span>
+          <button class="btn small end" id="chat-close">Fechar</button>
+        </div>
+        <ol id="messages" aria-live="polite"></ol>
+        <form class="chat-form" id="chat-form">
+          <input id="chat-input" maxlength="500" placeholder="Mensagem" autocomplete="off" aria-label="Mensagem para a sala" disabled>
+          <button class="btn small primary" id="chat-send" disabled>Enviar</button>
+        </form>
       </section>
 
       <section class="me card row" aria-label="Seu perfil">
@@ -180,6 +213,7 @@
           <span class="long" id="share-long">Compartilhar tela</span><span class="short" id="share-short">Tela</span>
         </button>
         <button class="btn" id="copy"><span class="long">Copiar link</span><span class="short">Link</span></button>
+        <button class="btn" id="chat-toggle">Chat<span class="badge" id="chat-badge" hidden></span></button>
         <button class="btn danger" id="leave">Sair</button>
       </footer>
     </main>
