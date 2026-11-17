@@ -851,9 +851,11 @@ function refresh() {
 
 // ---------- início ----------
 
-const shortId = roomId.slice(0, 8);
-$('room-tag').textContent = `# ${shortId}`;
-$('room-title').textContent = `Sala ${shortId}`;
+// "churrasco-k3f9" (name + random suffix) shows as "churrasco"; random IDs
+// show their first 8 characters.
+const roomName = roomId.match(/^(.+)-[a-z0-9]{4}$/)?.[1] ?? roomId.slice(0, 8);
+$('room-tag').textContent = `# ${roomName}`;
+$('room-title').textContent = `Sala ${roomName}`;
 if (!canShare) {
   shareBtn.title = 'Compartilhar tela exige HTTPS ou localhost';
   $('empty-hint').textContent = 'Neste endereço o navegador não deixa compartilhar a tela (precisa de HTTPS ou localhost), mas você pode assistir.';
