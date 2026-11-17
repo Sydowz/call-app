@@ -1,19 +1,40 @@
 //! Screen sharing between friends: serves the pages and relays WebRTC signaling.
 
+mod ice;
 mod rooms;
 mod signaling;
 
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use axum::{
-    extract::{Path, RawQuery, State},
+    extract::{FromRef, Path, RawQuery, State},
     http::header,
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
     Router,
 };
 
+use ice::Ice;
 use rooms::{valid_room_id, Rooms};
+
+/// What the handlers share: the rooms and the ICE (STUN/TURN) configuration.
+#[derive(Clone)]
+struct AppState {
+    rooms: Rooms,
+    ice: Arc<Ice>,
+}
+
+impl FromRef<AppState> for Rooms {
+    fn from_ref(state: &AppState) -> Self {
+        state.rooms.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<Ice> {
+    fn from_ref(state: &AppState) -> Self {
+        state.ice.clone()
+    }
+}
 
 const DEFAULT_PORT: u16 = 3000;
 
@@ -44,13 +65,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Err(_) => rooms::DEFAULT_MAX_PEERS,
     };
 
+    let ice = Ice::from_env();
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
-    println!("Servidor em http://localhost:{port} (até {max_peers} pessoas por sala)");
-    axum::serve(listener, app(Rooms::new(max_peers))).await?;
+    println!(
+        "Servidor em http://localhost:{port} (até {max_peers} pessoas por sala, TURN {})",
+        if ice.has_turn() {
+            "ligado"
+        } else {
+            "desligado"
+        }
+    );
+    axum::serve(listener, app(Rooms::new(max_peers), ice)).await?;
     Ok(())
 }
 
-fn app(rooms: Rooms) -> Router {
+fn app(rooms: Rooms, ice: Arc<Ice>) -> Router {
     Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/room/{id}", get(room_page))
@@ -67,10 +96,11 @@ fn app(rooms: Rooms) -> Router {
             }),
         )
         .route("/api/rooms", get(room_counts))
+        .route("/api/ice", get(ice_servers))
         .route("/ws/{id}", get(signaling::ws_handler))
         // For the hosting platform's health checks.
         .route("/health", get(|| async { "ok" }))
-        .with_state(rooms)
+        .with_state(AppState { rooms, ice })
 }
 
 async fn room_page(Path(id): Path<String>) -> Response {
@@ -114,6 +144,19 @@ async fn room_counts(State(rooms): State<Rooms>, RawQuery(query): RawQuery) -> R
         .into_response()
 }
 
+/// `GET /api/ice` -> `{"iceServers": [...]}` for `RTCPeerConnection`.
+async fn ice_servers(State(ice): State<Arc<Ice>>) -> Response {
+    let body = serde_json::json!({ "iceServers": ice.servers().await });
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body.to_string(),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,9 +172,13 @@ mod tests {
     }
 
     async fn start_server_with(rooms: Rooms) -> String {
+        start_app(app(rooms, Ice::stun_only())).await
+    }
+
+    async fn start_app(router: Router) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app(rooms)).await });
+        tokio::spawn(async move { axum::serve(listener, router).await });
         format!("127.0.0.1:{}", addr.port())
     }
 
@@ -220,6 +267,93 @@ mod tests {
 
         b.close(None).await.unwrap();
         assert_eq!(recv(&mut a).await, json!({ "type": "peer-left", "id": 2 }));
+    }
+
+    async fn http_get(addr: &str, path: &str) -> (String, Value) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        (head.to_owned(), serde_json::from_str(body).unwrap())
+    }
+
+    /// A stand-in for Cloudflare's credentials API; counts the calls it gets.
+    async fn fake_cloudflare(status: u16) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use axum::{extract::Path, http::HeaderMap, http::StatusCode, routing::post};
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        let router = Router::new().route(
+            "/v1/turn/keys/{id}/credentials/generate-ice-servers",
+            post(move |Path(id): Path<String>, headers: HeaderMap, body: String| {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    assert_eq!(id, "key123");
+                    assert_eq!(headers["authorization"], "Bearer secret-token");
+                    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), json!({ "ttl": 86400 }));
+                    let reply = json!({ "iceServers": [
+                        { "urls": ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"] },
+                        { "urls": ["turn:turn.cloudflare.com:3478?transport=udp", "turns:turn.cloudflare.com:443?transport=tcp"],
+                          "username": "user", "credential": "pass" }
+                    ]});
+                    (StatusCode::from_u16(status).unwrap(), reply.to_string())
+                }
+            }),
+        );
+        (format!("http://{}", start_app(router).await), calls)
+    }
+
+    #[tokio::test]
+    async fn ice_endpoint_without_turn_key_gives_stun() {
+        let addr = start_server().await;
+        let (head, body) = http_get(&addr, "/api/ice").await;
+        assert!(head.contains("cache-control: no-store"));
+        let servers = body["iceServers"].as_array().unwrap();
+        assert!(servers.iter().all(|s| s.get("username").is_none()));
+        assert!(servers[0]["urls"][0].as_str().unwrap().starts_with("stun:"));
+    }
+
+    #[tokio::test]
+    async fn ice_endpoint_with_turn_key_uses_cloudflare_once() {
+        let (api, calls) = fake_cloudflare(201).await;
+        let addr = start_app(app(
+            Rooms::default(),
+            Ice::with_turn("key123", "secret-token", &api),
+        ))
+        .await;
+        let (_, first) = http_get(&addr, "/api/ice").await;
+        let (_, second) = http_get(&addr, "/api/ice").await;
+        assert_eq!(
+            first["iceServers"],
+            json!([
+                { "urls": ["stun:stun.cloudflare.com:3478"] },
+                { "urls": ["turn:turn.cloudflare.com:3478?transport=udp", "turns:turn.cloudflare.com:443?transport=tcp"],
+                  "username": "user", "credential": "pass" }
+            ])
+        );
+        assert_eq!(first, second);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "credentials are reused"
+        );
+    }
+
+    #[tokio::test]
+    async fn ice_endpoint_falls_back_to_stun_when_cloudflare_fails() {
+        let (api, _) = fake_cloudflare(500).await;
+        let addr = start_app(app(
+            Rooms::default(),
+            Ice::with_turn("key123", "secret-token", &api),
+        ))
+        .await;
+        let (_, body) = http_get(&addr, "/api/ice").await;
+        let servers = body["iceServers"].as_array().unwrap();
+        assert!(!servers.is_empty());
+        assert!(servers.iter().all(|s| s.get("username").is_none()));
     }
 
     #[tokio::test]
